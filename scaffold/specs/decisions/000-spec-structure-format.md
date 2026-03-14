@@ -10,7 +10,7 @@ Specifications (specs) need a standardized format and structure to support itera
 
 ## Decision
 
-### Essential elements
+### Elements
 
 Spex organizes specs around three essential elements of software development:
 
@@ -29,7 +29,7 @@ Decisions and iterations are stored as records.
 - **Items** must follow the GEARS pattern [[2]] to specify requirements and constraints.
 Each item file must include an intent statement.
 
-### Repo layout
+### Organization
 
 Spex creates the default `specs/` directory under the repo root, with the following subdirectories and files.
 
@@ -40,12 +40,6 @@ Spex creates the default `specs/` directory under the repo root, with the follow
 | `items/` | item files | [\<path\>/]\<kebab-case\>.md |
 | `map.md` | spec index for navigation | - |
 | `meta.md` | the spec of specs | - |
-
-### Citation rules
-
-DRs and items are persistent and may cite each other.
-IRs may be temporary and must not be cited by DRs or items.
-Only `map.md` may reference IRs, as it indexes all spec files and is kept in sync as files change.
 
 ### Item groups
 
@@ -79,7 +73,7 @@ For test specs, Given-When-Then maps to: Given → Where+While, When → When, T
 A spec package is a coherent set of spec items for a *single* intent.
 It is the basic unit for spec composition, reuse, and extension.
 
-A spec package is stored in one to three coordinated item files sharing the same relative path and basename.
+A spec package consists of one to three coordinated item files sharing the same relative path and basename.
 The item files are located in `user/`, `dev/`, or `test/` according to which [groups](#item-groups) they belong to.
 
 For example, a spec package for generating short URLs may be named `gen-url` and consist of:
@@ -91,6 +85,12 @@ For example, a spec package for generating short URLs may be named `gen-url` and
 Here, `signing/` is a local collection of related spec packages for development convenience.
 
 `map.md` organizes item files by package.
+
+### Citations
+
+DRs and items are persistent and may cite each other.
+IRs may be temporary and must not be cited by DRs or items.
+`map.md` may cite IRs, as it indexes all spec files and is kept in sync as files change.
 
 ## Consequences
 
