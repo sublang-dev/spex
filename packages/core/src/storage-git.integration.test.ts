@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSessionStore } from "@sublang/playbook/session-store";
+import { Store } from "./store.js";
 import { ApplicationRegistry, sha256 } from "./app-storage.js";
 import { planStorageMerge, prepareStorageGitFiles, reserveStorageHome, selectStorageMerge, validateStorageTree } from "./storage-git.js";
 
@@ -110,4 +111,24 @@ test("unknown session versions stay local and cannot enter a selected portable t
   git(home, "add", "-f", file);
   await assert.rejects(() => validateStorageTree(home), /unsupported session version/);
   rmSync(home, { recursive: true, force: true });
+});
+
+
+test("the rebind command restores a Git ancestor's identity and recorded-path history", async () => {
+  const { home, project, sessionId, commit } = setup();
+  writeFileSync(join(home, "projects.json"), JSON.stringify({ v: 2, projects: [] })); commit("drop registration");
+  const checkout = mkdtempSync(join(tmpdir(), "spex-rebound-project-")); git(checkout, "init");
+  const script = resolve(dirname(fileURLToPath(import.meta.url)), "../../../scripts/storage-git.mjs");
+  const output = JSON.parse(execFileSync(process.execPath, [script, "--home", home, "rebind", project.id, checkout, "--alias", project.path, "--revision", "HEAD^"], { encoding: "utf8" }));
+  assert.equal(output.project.id, project.id); assert.equal(output.project.path, checkout); assert.deepEqual(output.diagnostics, []);
+  const store = new Store({ dir: home });
+  try { await store.initializeSessions(); assert.equal(store.listSessions()[0]?.id, sessionId); assert.equal(store.listSessions()[0]?.projectId, project.id); }
+  finally { store.close(); }
+  const before = readFileSync(join(home, "projects.json")); const child = join(checkout, "child"); mkdirSync(child);
+  assert.throws(() => execFileSync(process.execPath, [script, "--home", home, "rebind", project.id, child], { stdio: "pipe" }), /not the root/);
+  assert.deepEqual(readFileSync(join(home, "projects.json")), before);
+  const release = reserveStorageHome(home);
+  try { assert.throws(() => execFileSync(process.execPath, [script, "--home", home, "rebind", project.id, checkout], { stdio: "pipe" }), /held|one core/); }
+  finally { release(); }
+  rmSync(home, { recursive: true, force: true }); rmSync(checkout, { recursive: true, force: true });
 });

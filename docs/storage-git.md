@@ -39,7 +39,14 @@ After an ordinary checkout or fast-forward, validate before reopening:
 node /path/to/spex/scripts/storage-git.mjs --home . validate
 ```
 
-Validation tightens safe session permissions, rejects malformed data or mismatched replay bytes, and reports missing project bindings. Rebind an existing project ID to its local repository path in Spex; aliases associate history with projects but do not relocate checkpoints.
+Validation tightens safe session permissions, rejects malformed data or mismatched replay bytes, and reports missing project bindings. With the core stopped, bind an existing project ID to its local repository root:
+
+```sh
+node /path/to/spex/scripts/storage-git.mjs --home . rebind <project-id> /local/repository \
+  --alias /recorded/repository
+```
+
+Repeat `--alias` for other recorded paths. Omit it to retain existing aliases; supplied aliases replace that list. If Git selection removed the registration, add `--revision <ancestor>` to restore that ID's exact registry entry from a chosen ancestor of the current branch. The command rescans history and reports remaining unresolved bindings. Aliases associate history with projects; they do not relocate checkpoints.
 
 **Different repository or module paths permit history only under schema 7.** Git does not undo external actions; continuation still requires repository/effect reconciliation.
 
