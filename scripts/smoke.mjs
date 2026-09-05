@@ -18,7 +18,15 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const root = dirname(fileURLToPath(new URL(".", import.meta.url)));
 const require = createRequire(import.meta.url);
 const desktop = process.argv.includes("--desktop");
+const stages = ["build", "lint", "unit-and-integration", "browser", "journeys", "core-round-trip", "cli-user", "desktop"];
+const from = process.argv.find((arg) => arg.startsWith("--from="))?.slice(7) ?? "build";
 let stage = "";
+
+function selected(name) {
+  const include = stages.indexOf(name) >= stages.indexOf(from);
+  if (!include) process.stdout.write(`smoke: reusing prior ${name} verification\n`);
+  return include;
+}
 
 function run(name, command, args, options = {}) {
   stage = name;
@@ -114,21 +122,24 @@ async function coreRoundTrip() {
 }
 
 try {
-  run("build", "npm", ["run", "build"]);
-  run("lint", "node", ["packages/cli/dist/cli.js", "lint"]);
+  if (!stages.includes(from) || (from === "desktop" && !desktop)) {
+    throw new Error(`--from must name an enabled stage: ${stages.filter((name) => desktop || name !== "desktop").join(", ")}`);
+  }
+  if (selected("build")) run("build", "npm", ["run", "build"]);
+  if (selected("lint")) run("lint", "node", ["packages/cli/dist/cli.js", "lint"]);
   // Workspace test suites already include their integration coverage.
-  run("unit-and-integration", "npm", ["test"]);
+  if (selected("unit-and-integration")) run("unit-and-integration", "npm", ["test"]);
   // The browser journeys (DR-039): the served UI in Chromium against
   // a real core with substitute agents. The browser install is a
   // cached no-op after the first run.
-  run("browser", "npx", ["playwright", "install", "chromium"]);
-  run("journeys", "npm", ["run", "e2e"]);
-  await coreRoundTrip();
+  if (selected("browser")) run("browser", "npx", ["playwright", "install", "chromium"]);
+  if (selected("journeys")) run("journeys", "npm", ["run", "e2e"]);
+  if (selected("core-round-trip")) await coreRoundTrip();
   // The end-user pass: pack the real tarball, install it into an
   // isolated prefix, and walk the README journeys (fresh scaffold,
   // lint, --lang, --update, legacy detection) via the spex bin.
-  run("cli-user", "node", ["scripts/cli-smoke.mjs"]);
-  if (desktop) {
+  if (selected("cli-user")) run("cli-user", "node", ["scripts/cli-smoke.mjs"]);
+  if (desktop && selected("desktop")) {
     // The ABI flip must never outlive the run: node-gyp cleans the
     // Node build before compiling for Electron, so even a failed
     // rebuild:electron needs the restore — the flip itself lives
@@ -185,7 +196,7 @@ try {
       "\n(desktop render skipped — pass --desktop before a release)\n",
     );
   }
-  process.stdout.write("\nsmoke: all stages passed\n");
+  process.stdout.write(from === "build" ? "\nsmoke: all stages passed\n" : "\nsmoke: selected stages passed; earlier results reused\n");
 } catch (error) {
   process.stderr.write(`\nsmoke FAILED at ${stage}: ${error.message}\n`);
   process.exit(1);

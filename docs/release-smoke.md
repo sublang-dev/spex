@@ -34,6 +34,11 @@ No provider or sign-in is involved, and the render boots on a scratch
 state root, so a running Spex desktop does not block it; a failure
 names its stage.
 
+To resume after a corrected failure, use `--from=<stage>` only after every
+earlier stage has passed on its current inputs. For example,
+`npm run smoke -- --desktop --from=browser` resumes at browser setup.
+Record the earlier results and any targeted reruns with the resumed run.
+
 ## 1b. Live desktop smoke (signed-in — the app-release gate)
 
 ```bash
