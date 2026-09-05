@@ -105,6 +105,7 @@ Before admitting writers to the unified layout, migration shall complete under t
 - config backups, local state and every ignored family in the catalog [[storage-1](#storage-1)] are excluded by Spex home's tracked `.gitignore` before tracking begins.
 - tracked `.gitattributes` disables line-ending conversion for portable JSON/JSONL files, so Git preserves the bytes used to verify saved recovery state.
 - existing `meta.json` remains `{version:1,importedLegacy?:string[]}` for completed legacy database imports; new migrations use their own receipts.
+- ordinary default-home startup imports the former `$XDG_STATE_HOME/playbook/sessions` or `~/.local/state/playbook/sessions` through Playbook's guarded migration [[1]]; explicit home/session selections suppress discovery, while a different configuration file alone does not.
 
 ### storage-10
 

@@ -11,6 +11,7 @@
 import {
   cpSync,
   existsSync,
+  readFileSync,
   rmSync,
   statSync,
   watch,
@@ -19,6 +20,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { parse as parseYaml } from "yaml";
 import { WebSocketServer, WebSocket } from "ws";
 import type { AddressInfo } from "node:net";
 import type { Server as HttpServer } from "node:http";
@@ -201,6 +203,7 @@ export class CoreService {
   private ledgerTimer?: NodeJS.Timeout;
   /** Monotonic reload identity; a superseded reload commits nothing. */
   private reloadGeneration = 0;
+  private readonly migrationDiagnostics: {file: string; reason: string; blocking: boolean}[] = [];
 
   private constructor(options: CoreServiceOptions) {
     this.options = options;
@@ -288,6 +291,7 @@ export class CoreService {
     service.seeded = seedConfig(service.configPath);
     if (service.options.dataDir) migrateManagedLibraryConfig(service.configPath, service.libraryDir(), service.options.dataDir);
     await service.reloadConfig();
+    await service.migrateLegacySessionDefault();
     await service.store.initializeSessions(service.sessionsDir());
     await service.syncForeignSessions();
     service.store.validateStorage();
@@ -361,6 +365,19 @@ export class CoreService {
   private sessionsDir(): string {
     if (!this.options.dataDir && !this.options.sessionsDir) return this.store.sessionStore().sessionsDir;
     return this.options.sessionsDir ?? resolveSessionsDir(this.configPath, { ...this.env, HOME: this.home, SPEX_HOME: this.options.dataDir ?? this.env.SPEX_HOME });
+  }
+
+  private async migrateLegacySessionDefault(): Promise<void> {
+    if (!this.options.dataDir || this.options.sessionsDir || this.env.SPEX_HOME?.trim() ||
+      resolve(this.options.dataDir) !== resolve(this.home,".spex")) return;
+    let config: unknown;
+    try { config = parseYaml(readFileSync(this.configPath,"utf8")); }
+    catch { return; }
+    if (!config || typeof config !== "object" || Object.hasOwn(config,"sessions")) return;
+    const result = await this.store.sessionStore().migrateLegacyDefault({env:this.env,homeDir:this.home});
+    for (const entry of result.skipped) this.migrationDiagnostics.push({
+      file:join(result.sourceDir,`${entry.sessionId}.json`), reason:entry.reason, blocking:false,
+    });
   }
 
   private watchSessionsDir(): void {
@@ -755,7 +772,7 @@ export class CoreService {
         return project;
       }
       case "storage.diagnostics":
-        return [...this.store.storageDiagnostics(), ...this.store.sessionDiagnostics()];
+        return [...this.migrationDiagnostics, ...this.store.storageDiagnostics(), ...this.store.sessionDiagnostics()];
       case "project.create": {
         const path = expandPath(command.path, this.home);
         if (this.store.getProjectByPath(path)) {

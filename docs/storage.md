@@ -133,6 +133,8 @@ Unsaved drafts and access tokens are not portable session state.
 ## Migration and definitions
 
 Stop legacy writers before replacing desktop sidecars with shared manifests.
+Default-home startup imports the former XDG session directory and retains its original files in migration receipts.
+Explicit homes or session directories are not auto-populated from that old store.
 CLI schemas 2–5 and desktop checkpoints without compatible recovery data remain history only.
 Legacy provider tokens cannot become usable hints because their checkpoint binding is unproven.
 

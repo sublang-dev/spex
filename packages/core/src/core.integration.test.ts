@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -2149,6 +2149,48 @@ test("playbook-library-32: compile.run binds derived roles however the form case
   await harness.service.stop();
 });
 
+
+for (const selection of ["default", "home override", "sessions override"] as const) {
+  test(`storage-15: legacy default discovery respects ${selection}`, async (t) => {
+    const home = mkdtempSync(join(tmpdir(),"spex-legacy-default-"));
+    const dataDir = selection === "home override" ? join(home,"custom") : join(home,".spex");
+    const legacyDir = join(home,"old-state","playbook","sessions");
+    const projectPath = join(home,"project");
+    const configPath = join(home,"custom-config.yaml");
+    mkdirSync(legacyDir,{recursive:true,mode:0o700}); mkdirSync(projectPath);
+    execFileSync("git",["init","-q",projectPath]);
+    writeFileSync(configPath,(selection === "sessions override" ? `sessions: ${join(dataDir,"sessions")}\n` : "") + VALID_CONFIG);
+    const plan = await loadLaunchPlan({userConfigPath:configPath});
+    const {imports} = fakeAdapterImports({fallback:{result:"Done"}});
+    const seedDir = join(home,"seed-sessions");
+    const seed = await openSessionHost({store:createSessionStore({sessionsDir:seedDir}),mode:"new",cwd:projectPath,
+      config:executionConfigFromPlan(plan),adapterImports:imports});
+    await seed.handleBossTurn("Prior CLI work");
+    const sessionId = seed.sessionId;
+    const source = join(legacyDir,`${sessionId}.json`);
+    const original = JSON.stringify(await seed.read());
+    assert.equal(JSON.parse(original).schemaVersion,6,"the public lifecycle exports the released legacy recovery projection");
+    await seed.dispose();
+    writeFileSync(source,original,{mode:0o600});
+    writeFileSync(join(legacyDir,`${sessionId}.records.jsonl`),readFileSync(join(seedDir,`${sessionId}.records.jsonl`)),{mode:0o600});
+    const service = await CoreService.start({token:"test",configPath,dataDir,home,watchConfig:false,
+      env:{HOME:home,XDG_STATE_HOME:join(home,"old-state"),...(selection === "home override" ? {SPEX_HOME:dataDir} : {})}});
+    t.after(async () => {await service.stop();rmSync(home,{recursive:true,force:true});});
+    const client = new Client(service.port()); t.after(() => client.close()); await client.open();
+    await client.expectOk("project.register",{path:projectPath});
+    const sessions = await client.expectOk("session.list",{});
+    if (selection === "default") {
+      assert.equal(sessions[0]?.id,sessionId); assert.equal(sessions[0]?.title,"Prior CLI work");
+      assert.equal(sessions[0]?.continuable,true);
+      assert.equal(existsSync(source),false,"old active manifest retires after the new bundle is valid");
+      const migrations = join(dataDir,"local","migrations");
+      const inputs = readdirSync(migrations,{recursive:true}).filter((path) => String(path).endsWith(join("inputs","0")));
+      assert.ok(inputs.some((path) => readFileSync(join(migrations,String(path)),"utf8") === original),"original bytes are retained locally");
+    } else {
+      assert.equal(sessions.length,0); assert.equal(readFileSync(source,"utf8"),original);
+    }
+  });
+}
 
 for (const action of ["retry", "discard"] as const) {
   test(`core-service-84: desktop ${action} recovers CLI storage without current config`, async (t) => {
