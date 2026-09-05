@@ -28,7 +28,7 @@ Proposed (2026-09-04); would amend:
 
 | Portable session file | Authority |
 | --- | --- |
-| `<id>.json` | Identity, project locator, versioned checkpoint, recovery journal, uncertain work, effect ledger, and replay cursor/completeness |
+| `<id>.json` | Identity, `cwd`, versioned checkpoint, recovery journal, uncertain work, effect ledger, and replay cursor/completeness |
 | `<id>.records.jsonl` | Ordered presentation history, visibility, roles and context in the v1 envelope |
 
 - Persist recovery authority before external effects; reconcile interruptions independently of transcript completeness.
@@ -42,7 +42,9 @@ Proposed (2026-09-04); would amend:
 ### Portability
 
 - Before Git tracking, Playbook extracts local hints from all recovery bindings and migrates supported CLI manifests/sidecars to validated token-free bundles. Original/unsupported inputs stay untracked and ignored; shared Git ancestry starts after migration.
-- Track project identities (`id`, `name`, `registeredAt`) in `projects.json`; map IDs to absolute paths in ignored `local/project-paths.json`. Manifests use project IDs; rebinding preserves IDs, and unbound projects permit history only.
+- Track project identities (`id`, `name`, `registeredAt`) in `projects.json`; ignored `local/project-paths.json` binds each ID to its current absolute path and recorded `cwd` aliases.
+- Both hosts record `cwd`; the CLI needs no registry access. Spex resolves it to a registered ID through local bindings and rescans after registration or rebinding; aliases bind history, not execution authority.
+- Assume each recorded `cwd` identifies one project across devices; unresolved or conflicting bindings require explicit selection. Rebinding selects an existing identity, restores its registry entry from Git ancestry if absent, and assigns a local path without minting an ID.
 - Migrate and write managed `playbooks.<id>.from` as config-relative paths; both hosts share resolution for loading, validation and artifact lookup. Preserve bare package specifiers; validate remaining explicit paths on the destination.
 - Only Playbook-defined relocation may adapt checkpoint project/module locators; never substitute paths in opaque snapshots or effect receipts. Unsupported relocation permits history only.
 - Retain library sources; generated files must be relocatable or rebuilt locally before use.
@@ -79,7 +81,8 @@ Proposed (2026-09-04); would amend:
 
 - Manifest and stream are indivisible; Git hunk preferences do not enforce this.
 - Apply the same rule to other structured files, including `intents/<projectId>.jsonl`. Divergence requires an explicit whole-file choice; unselected acts leave active state but remain recoverable through Git ancestry.
-- Validate the store before reopening, including intent source uniqueness, queue order and acyclic links against selected session histories. Selection preserves uncertainty and cannot undo external effects; reconcile omitted executed work before continuation.
+- Before reopening, report sessions with unresolved `cwd` and bindings/intent logs naming absent project IDs; keep them unlisted without deleting files or auto-restoring registrations.
+- Validate intent source uniqueness, queue order and acyclic links against selected session histories before reopening. Selection preserves uncertainty and cannot undo external effects; reconcile omitted executed work before continuation.
 
 ### Deletion
 
@@ -94,7 +97,7 @@ Define each encoding once in its owning spec package, enforced by shared validat
 | Owner | Required definition |
 | --- | --- |
 | Playbook | Manifest/context versions and fields; token extraction, migration and token-free validation; record headers/unknown-kind rules; context references, digest encoding, hints and supported locator relocation. |
-| Spex | Git selection/store validation; project identities/local bindings; config-relative module resolution; local UI preferences and migration receipts; library rebuilding before omitting generated outputs. |
+| Spex | Git selection/store validation; project identities, path/alias resolution and identity restoration; config-relative module resolution; local UI preferences and migration receipts; library rebuilding before omitting generated outputs. |
 
 ## Consequences
 
