@@ -3,7 +3,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
+import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import type { IntentInfo, ProjectInfo } from "./protocol.js";
 
 export interface ProjectIdentity { id: string; name: string; registeredAt: number }
@@ -24,7 +24,12 @@ const object = (value: unknown): value is Record<string, unknown> => value !== n
 const text = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 const timestamp = (value: unknown): boolean => Number.isSafeInteger(value) && (value as number) >= 0;
 const uuid = (value: unknown): value is string => typeof value === "string" && UUID.test(value);
-const path = (value: unknown): value is string => text(value) && (isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)) && !value.includes("\0") && (isAbsolute(value) ? normalize(value) === value : true);
+const localPath = (value: unknown): value is string => text(value) && !value.includes("\0") && isAbsolute(value) && resolve(value) === value;
+// Recorded aliases retain the source device's syntax; they never authorize execution.
+const recordedPath = (value: unknown): value is string => text(value) && !value.includes("\0") && (
+  posix.isAbsolute(value) && posix.resolve(value) === value ||
+  (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\")) && win32.isAbsolute(value) && win32.resolve(value) === value
+);
 
 export class StorageFormatError extends Error {
   constructor(readonly file: string, reason: string) { super(`${file}: ${reason}`); this.name = "StorageFormatError"; }
@@ -53,7 +58,7 @@ export function parseBindings(value: unknown, file = "local/project-paths.json")
   const ids = new Set<string>();
   for (const b of value.bindings) {
     closed(b, ["id", "path", "aliases"], [], file);
-    need(uuid(b.id) && path(b.path) && Array.isArray(b.aliases) && b.aliases.every(path) && new Set(b.aliases).size === b.aliases.length, file, "invalid project binding");
+    need(uuid(b.id) && localPath(b.path) && Array.isArray(b.aliases) && b.aliases.every(recordedPath) && new Set(b.aliases).size === b.aliases.length, file, "invalid project binding");
     need(!ids.has(b.id), file, `duplicate binding ${b.id}`); ids.add(b.id);
   }
   return value.bindings as unknown as ProjectBinding[];
@@ -198,7 +203,7 @@ export function migrateApplicationRegistry(home: string): void {
   const identities: ProjectIdentity[] = []; const bindings: ProjectBinding[] = [];
   for (const p of before.projects) {
     closed(p, ["id", "path", "name", "registeredAt"], [], file);
-    need(path(p.path), file, "invalid legacy project path");
+    need(localPath(p.path), file, "invalid legacy project path");
     identities.push({ id: p.id as string, name: p.name as string, registeredAt: p.registeredAt as number });
     bindings.push({ id: p.id as string, path: p.path, aliases: [] });
   }
@@ -256,9 +261,10 @@ export class ApplicationRegistry {
     return identity ? { ...identity, path: matches[0].path } : undefined;
   }
   register(p: string, name: string, at: number): ProjectInfo {
-    const existing = this.resolvePath(p); if (existing) return existing;
-    need(![...this.bindings.values()].some((b) => b.path === p || b.aliases.includes(p)), "local/project-paths.json", `path ${p} needs explicit rebinding`);
-    const id = randomUUID(); return this.bind({ id, name, registeredAt: at }, resolve(p), []);
+    const normalized = resolve(p);
+    const existing = this.resolvePath(normalized); if (existing) return existing;
+    need(![...this.bindings.values()].some((b) => b.path === normalized || b.aliases.includes(normalized)), "local/project-paths.json", `path ${normalized} needs explicit rebinding`);
+    const id = randomUUID(); return this.bind({ id, name, registeredAt: at }, normalized, []);
   }
   bind(identity: ProjectIdentity, p: string, aliases?: string[]): ProjectInfo {
     parseRegistry({ v: 2, projects: [identity] });

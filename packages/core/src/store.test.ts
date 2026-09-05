@@ -13,12 +13,14 @@ import { projectCaptainSessionStructure, type SessionExecutionProjection, type S
 import { StateRootHeldError, Store } from "./store.js";
 import type { SessionInfo, TmuxPlayRecord } from "./protocol.js";
 
+const PROJECT_PATH = join(tmpdir(), "spex-store-project");
+
 function tempRoot(): string {
   return join(mkdtempSync(join(tmpdir(), "spex-store-")), "state");
 }
 
 function sampleSession(store: Store): SessionInfo {
-  const project = store.registerProject("/tmp/proj", "proj", 1000);
+  const project = store.registerProject(PROJECT_PATH, "proj", 1000);
   const session: SessionInfo = {
     id: "71000000-0000-4000-8000-000000000001",
     projectId: project.id,
@@ -43,7 +45,7 @@ const execution: SessionExecutionProjection = {
   catalog: { code: { id: "code", from: "@sublang/playbook/code/registry", manifestCommand: "code", command: "code", intent: "Implement a change", artifactSchema: 3, requiredRoleIds: ["coder"], concurrentRoleSets: [], roles: { coder: { playerId: "dev.coder", model: { kind: "provider-default" }, effort: { kind: "provider-default" } } }, options: {} } },
 };
 async function sharedSession(store: Store) {
-  store.registerProject("/tmp/proj", "proj", 1000);
+  store.registerProject(PROJECT_PATH, "proj", 1000);
   const shared = store.sessionStore(); await shared.prepare();
   const lease = await shared.acquire(SESSION);
   const structure = projectCaptainSessionStructure(execution);
@@ -59,14 +61,14 @@ async function sharedSession(store: Store) {
     },
     playerSessions: Object.fromEntries(structure.players.map(({ id, ...agent }) => [id, agent])), issuedSessionIds: [captainId], sequences: { turn: 0, journal: 0 }, journal: [], effectLedger: ledger, mode: "chat",
   } as unknown as SessionFreshBoundary["snapshot"];
-  await lease.initializeSettledWithPredecessor({ cwd: "/tmp/proj", structuralProjection: structure, executionProjection: execution, snapshot });
+  await lease.initializeSettledWithPredecessor({ cwd: PROJECT_PATH, structuralProjection: structure, executionProjection: execution, snapshot });
   return lease;
 }
 
 test("projects register idempotently by path and can be removed", () => {
   const store = new Store({ dir: tempRoot() });
-  const a = store.registerProject("/tmp/x", "x", 1);
-  const b = store.registerProject("/tmp/x", "x", 2);
+  const a = store.registerProject(join(tmpdir(), "spex-store-x"), "x", 1);
+  const b = store.registerProject(join(tmpdir(), "spex-store-x"), "x", 2);
   assert.equal(a.id, b.id);
   assert.equal(store.listProjects().length, 1);
   assert.ok(store.removeProject(a.id));
@@ -129,7 +131,7 @@ test("liveness comes from the host while shared recovery survives restart", asyn
   await reopened.initializeSessions();
   assert.equal(reopened.listSessions()[0].live, false);
   assert.equal(reopened.listSessions()[0].continuable, true);
-  assert.equal(reopened.listSessions()[0].projectPath, "/tmp/proj");
+  assert.equal(reopened.listSessions()[0].projectPath, PROJECT_PATH);
   assert.equal(existsSync(join(dir, "sessions", `${SESSION}.spex.json`)), false);
   const before = readFileSync(join(dir, "sessions", `${SESSION}.json`));
   await reopened.refreshSession(SESSION);
@@ -188,7 +190,7 @@ test("core-service-32: session.list carries each session's conversation summary"
   // The rail's rows are only scannable if the listing carries scent:
   // the session's own first words, its size, and whether it ended badly.
   const store = new Store();
-  const project = store.registerProject("/tmp/proj", "proj", 1000);
+  const project = store.registerProject(PROJECT_PATH, "proj", 1000);
   const base = {
     projectId: project.id,
     projectPath: project.path,
@@ -307,7 +309,7 @@ test("core-service-64: a legacy SQLite store imports once, rows served from file
       closed_at INTEGER, closed_as TEXT
     );
     INSERT INTO meta VALUES ('schema_version', '3');
-    INSERT INTO projects VALUES ('71000000-0000-4000-8000-000000000004', '/tmp/proj', 'proj', 1);
+    INSERT INTO projects VALUES ('71000000-0000-4000-8000-000000000004', '${PROJECT_PATH.replaceAll("'", "''")}', 'proj', 1);
     INSERT INTO sessions VALUES ('71000000-0000-4000-8000-000000000001', '71000000-0000-4000-8000-000000000004', 1, NULL, 1, '[]', '[]');
     INSERT INTO prefs VALUES ('viewed:71000000-0000-4000-8000-000000000001', '1');
     INSERT INTO intents VALUES ('71000000-0000-4000-8000-000000000002', '71000000-0000-4000-8000-000000000004', 'Ship it', NULL, NULL, NULL,
@@ -415,23 +417,23 @@ test("a second shell's legacy import merges into the root, clobbering nothing", 
         registered_at INTEGER NOT NULL
       );
       CREATE TABLE prefs (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
-      INSERT INTO projects VALUES ('${projectId}', '${projectPath}', 'p', 1);
+      INSERT INTO projects VALUES ('${projectId}', '${projectPath.replaceAll("'", "''")}', 'p', 1);
       INSERT INTO prefs VALUES ('shared', '"${projectId}"');
     `);
     db.close();
   };
-  seed(join(dir, "desktop.db"), "71000000-0000-4000-8000-000000000005", "/tmp/desktop-proj");
-  seed(join(dir, "server.db"), "71000000-0000-4000-8000-000000000006", "/tmp/server-proj");
+  seed(join(dir, "desktop.db"), "71000000-0000-4000-8000-000000000005", join(tmpdir(), "spex-desktop-project"));
+  seed(join(dir, "server.db"), "71000000-0000-4000-8000-000000000006", join(tmpdir(), "spex-server-project"));
 
   const first = new Store({ dir: root, legacyDbPath: join(dir, "desktop.db") });
-  first.registerProject("/tmp/new-work", "new-work", 2);
+  first.registerProject(join(tmpdir(), "spex-new-work"), "new-work", 2);
   first.setPref("shared", "live");
   first.close();
 
   const second = new Store({ dir: root, legacyDbPath: join(dir, "server.db") });
   assert.deepEqual(
     second.listProjects().map((project) => project.path).sort(),
-    ["/tmp/desktop-proj", "/tmp/new-work", "/tmp/server-proj"],
+    [join(tmpdir(), "spex-desktop-project"), join(tmpdir(), "spex-new-work"), join(tmpdir(), "spex-server-project")],
   );
   // Existing preferences win over imported ones: they are newer.
   assert.equal(second.getPref("shared"), "live");
@@ -440,7 +442,7 @@ test("a second shell's legacy import merges into the root, clobbering nothing", 
 
 test("a torn intent tail remains readable but refuses further writes without changing memory", () => {
   const dir = tempRoot(); const store = new Store({ dir });
-  const project = store.registerProject("/tmp/heal", "heal", 1);
+  const project = store.registerProject(join(tmpdir(), "spex-heal"), "heal", 1);
   const firstId = "71000000-0000-4000-8000-000000000002";
   const nextId = "71000000-0000-4000-8000-000000000003";
   store.addIntent({ id: firstId, projectId: project.id, text: "First", rank: "i", createdAt: 1 });
@@ -462,7 +464,7 @@ test("an unreadable legacy store skips its import and never blocks startup", () 
   // migration: a zero-byte file.
   writeFileSync(legacyDbPath, "");
   const store = new Store({ dir: join(dir, "state"), legacyDbPath });
-  store.registerProject("/tmp/after", "after", 1);
+  store.registerProject(join(tmpdir(), "spex-after"), "after", 1);
   store.close();
   const reopened = new Store({ dir: join(dir, "state"), legacyDbPath });
   assert.equal(reopened.listProjects().length, 1);

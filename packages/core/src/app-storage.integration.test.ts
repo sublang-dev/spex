@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import type { IntentInfo } from "./protocol.js";
 import { ApplicationRegistry, foldIntentActs, migrateApplicationRegistry, parseIntentLog, parsePrefs, sha256, validateApplicationTree, validateIntentRelations } from "./app-storage.js";
@@ -60,6 +60,34 @@ test("unknown registry versions and ambiguous path bindings preserve files and r
   assert.match(reopened.diagnostics()[0].reason, /unregistered/);
   assert.throws(() => reopened.register(join(home, "a"), "New", 2), /explicit rebinding/);
   rmSync(home, { recursive: true, force: true });
+});
+
+test("local registration normalizes before lookup and foreign aliases survive restart unchanged", () => {
+  const home = scratch();
+  try {
+    const registry = new ApplicationRegistry(home);
+    const local = join(home, "repo");
+    const project = registry.register(local, "Local", 1);
+    assert.equal(registry.register(`${local}${sep}.`, "Repeated", 2).id, project.id);
+    assert.equal(registry.register(local.replaceAll("\\", "/"), "Slashes", 3).id, project.id);
+    const aliases = ["/Users/alice/project", "C:\\Users\\alice\\project", "\\\\server\\share\\project"];
+    registry.bind(registry.identities.get(project.id)!, local, aliases);
+    const reopened = new ApplicationRegistry(home);
+    assert.equal(reopened.identities.size, 1);
+    assert.equal(reopened.project(project.id)?.path, local);
+    for (const alias of aliases) assert.equal(reopened.resolvePath(alias)?.id, project.id);
+    const file = join(home, "local", "project-paths.json");
+    const before = readFileSync(file);
+    for (const alias of ["/Users/alice/../project", "C:\\Users\\alice\\..\\project", "C:/Users/alice/project", "C:project", "\\Users\\alice", "relative/project", "/Users/alice/project\0"]) {
+      assert.throws(() => reopened.bind(reopened.identities.get(project.id)!, local, [alias]), /invalid project binding/);
+      assert.deepEqual(readFileSync(file), before);
+    }
+    const foreignLocal = process.platform === "win32" ? aliases[0] : aliases[1];
+    const invalid = JSON.stringify({v:1, bindings:[{id:project.id, path:foreignLocal, aliases:[]}]});
+    writeFileSync(file, invalid);
+    assert.throws(() => new ApplicationRegistry(home), /invalid project binding/);
+    assert.equal(readFileSync(file, "utf8"), invalid);
+  } finally { rmSync(home, {recursive:true, force:true}); }
 });
 
 test("intent acts fold exactly, ignore only an incomplete last line, and refuse lost or duplicated identities", () => {
