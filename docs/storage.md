@@ -3,10 +3,10 @@
 
 # The `~/.spex` catalog
 
-This catalog describes the storage contract in [DR-045](../specs/decisions/045-unified-session-storage.md).
+This catalog describes the proposed storage contract in [DR-045](../specs/decisions/045-unified-session-storage.md).
 Implementation is pending; the [current inventory](design/unified-storage.md) records today's layout.
 
-One home holds Spex's durable application data and the sessions shared by desktop and CLI.
+One home holds Spex's durable core data and the sessions shared by desktop and CLI.
 Paths below are relative to `${SPEX_HOME:-~/.spex}`; explicit config/store overrides prevail, and files outside this root do not participate in its Git history.
 
 ## Files at a glance
@@ -22,7 +22,7 @@ Paths below are relative to `${SPEX_HOME:-~/.spex}`; explicit config/store overr
 | `sessions/<id>.records.jsonl` | Captain/player history, visibility, settings, bindings and graph definitions. | Track with its manifest |
 | `playbooks/<id>/` | Library sources and generated modules/artifacts. | Track sources; omit outputs only with local rebuilding |
 | `local/project-paths.json` | Project IDs mapped to current absolute paths and recorded-path aliases. | Local |
-| `prefs.json` | UI preferences and per-session viewed markers. | Local |
+| `prefs.json` | Core preferences and per-session viewed markers. | Local |
 | `forge-cache.json` | Version 1: cached forge work lists; rebuildable. | Local |
 | `meta.json`, `local/migrations/<id>/` | Legacy import markers; new `receipt.json` and original bytes under `inputs/`. | Local |
 | Config backups | Original configuration files. | Local |
@@ -68,7 +68,8 @@ Deferred operations retain player identity and effect evidence without a provide
 Start shared Git ancestry **after migration removes all provider tokens from portable recovery bindings**; originals and unsupported inputs stay ignored.
 Use one branch per device/root, shared by desktop and CLI, merged to/from `main`.
 Stop local writers during commit, checkout and merge; execute each session on one device at a time.
-Git writes use a private `077` umask; session directories remain `0700` and files `0600`.
+Reopening tightens verified user-owned session directories/files to `0700`/`0600` before strict validation; unsafe paths still refuse.
+A private `077` Git umask avoids exposure before reopening.
 
 Compare each complete session bundle with the common ancestor:
 
@@ -111,6 +112,7 @@ Viewed markers reset when history is replaced.
 Caches rebuild; preferences, bindings and migration records preserve local state outside Git.
 
 Repositories and their effect claims, installed runtimes, provider credentials/history and browser-engine profiles remain external.
+Rail, split, expansion, frame and other layout preferences stay in browser storage; no core preference API or migration is added.
 Unsaved drafts and access tokens are not portable session state.
 
 ## Migration and contract owners

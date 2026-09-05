@@ -8,7 +8,6 @@
 Accepted (2026-09-01); the floor moved to ^12.2.0 on 2026-09-02 in lockstep with slc 0.7.0, whose link contract has a linked runtime import `renderGovernedOutcomeContract` from the engine — an export playbook 12.2 introduces.
 Playbook 12.1 and 12.2 publish `@sublang/playbook/host-capabilities`, but its repository object lacks two of the six members the Captain shell's exact-shape validator demands and its per-playbook ledgers diverge where the shell requires agreement, so the by-path builder below stands ([DR-038](038-history-is-done-work.md)).
 Amends [DR-034](034-playbook-9-adoption.md) (the playbook floor moves to ^12.2.0), [DR-032](032-session-players.md) (the cligent floor moves to ^0.24.0), and [DR-036](036-file-state-store.md) (a captain-session record without a replay stream lists from its Boss journal).
-Amended by [DR-045](045-unified-session-storage.md): shared host lifecycle and durable effect-ledger authority.
 
 ## Context
 

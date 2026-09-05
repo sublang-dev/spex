@@ -5,14 +5,14 @@
 
 ## Intent
 
-This package defines Spex-owned file encodings, project binding, migration and offline Git selection under [DR-045](../decisions/045-unified-session-storage.md).
+This package proposes Spex-owned file encodings, project binding, migration and offline Git selection under [DR-045](../decisions/045-unified-session-storage.md).
 Playbook owns the session bundle and its recovery rules [[1]]; this package treats that bundle as one selection unit.
 
 ## External Behavior
 
 ### storage-1
 
-The store shall place its default durable data under `${SPEX_HOME:-~/.spex}`, with explicit config/store overrides taking precedence and each path below relative to that root:
+The store shall place its default core-owned durable data under `${SPEX_HOME:-~/.spex}`, with explicit config/store overrides taking precedence and each path below relative to that root:
 
 | Path | Authority | Git |
 | --- | --- | --- |
@@ -22,7 +22,7 @@ The store shall place its default durable data under `${SPEX_HOME:-~/.spex}`, wi
 | `sessions/<id>.json`, `sessions/<id>.records.jsonl` | Playbook manifest and replay bundle [[1]] | Tracked together |
 | `playbooks/<id>/` | Library sources and outputs [[storage-8](#storage-8)] | Sources tracked; outputs omitted only with rebuilding |
 | `local/project-paths.json` | Local bindings [[storage-3](#storage-3)] | Ignored |
-| `prefs.json` | Device-local preferences [[storage-5](#storage-5)] | Ignored |
+| `prefs.json` | Core preferences and viewed markers [[storage-5](#storage-5)] | Ignored |
 | `meta.json`, `local/migrations/` | Migration receipts and retained inputs [[storage-9](#storage-9)] | Ignored |
 | `forge-cache.json` | Rebuildable forge cache | Ignored |
 | `sessions/<id>.hints.json`, leases, retired guards, staging and atomic-write temporary files | Local continuity and coordination [[1]] | Ignored |
@@ -58,7 +58,7 @@ The intent store shall encode each newline-terminated act as a closed JSON objec
 
 ### storage-5
 
-The preference store shall encode `prefs.json` as exactly `{v:1,prefs:{...}}`, with JSON-valued keys for browser-local UI preferences and `viewed:<sessionId>` nonnegative integer turn markers, resetting a session's viewed marker when its history is replaced.
+The preference store shall encode `prefs.json` as exactly `{v:1,prefs:{...}}`, with JSON-valued core preferences and `viewed:<sessionId>` nonnegative integer turn markers, resetting a session's viewed marker when its history is replaced.
 
 ### storage-6
 
@@ -99,7 +99,7 @@ Before admitting writers to the unified layout, the migration shall complete und
 
 When state is synchronized through Git, the workflow shall use shared ancestry with one branch per device/root, shared by desktop and CLI and merged to/from `main`, while all local writers are stopped and each session executes on at most one device at a time:
 
-- Git writes use a private `077` umask and preserve the session store's `0700` directory/`0600` file boundary [[1]]; reopening validates that boundary rather than weakening it.
+- reopening uses Playbook's shared preparation to remove excess permissions from verified user-owned session entries before strict validation [[1]]; a private `077` Git umask avoids exposure before reopening.
 
 ### storage-11
 
@@ -118,7 +118,7 @@ When Git selects stored state, the validator shall compare the pre-merge tips wi
 
 ### storage-12
 
-Before reopening selected state, the validator shall validate the complete selected tree without modifying it:
+Before reopening selected state, the validator shall validate the complete selected tree without changing file contents, after permission preparation [[storage-10](#storage-10)]:
 
 - file versions, closed encodings and session checkpoint/digest relationships are valid [[storage-2](#storage-2)] [[storage-3](#storage-3)] [[storage-4](#storage-4)] [[storage-5](#storage-5)] [[1]];
 - open intent source identities and ranks are unique within a project, after-links name existing intents and form no cycle, and extant dispatch targets belong to the same project with valid turn boundaries;
@@ -138,11 +138,11 @@ The core shall remain the sole writer of Spex-owned files through atomic same-di
 
 ### storage-15
 
-When an integration suite migrates a stopped legacy root and opens it through desktop and CLI hosts, it shall verify the root/override layout [[storage-1](#storage-1)], unchanged project identities [[storage-2](#storage-2)], local alias resolution [[storage-3](#storage-3)], exact act folds [[storage-4](#storage-4)], local preferences [[storage-5](#storage-5)], late binding and identity restoration [[storage-6](#storage-6)], shared locator resolution [[storage-7](#storage-7)], source-backed library rebuilding [[storage-8](#storage-8)], and restart-safe migration with token-free Git ancestry [[storage-9](#storage-9)].
+When an integration suite migrates a stopped legacy root and opens it through desktop and CLI hosts, it shall verify the root/override layout [[storage-1](#storage-1)], unchanged project identities [[storage-2](#storage-2)], local alias resolution [[storage-3](#storage-3)], exact act folds [[storage-4](#storage-4)], core preferences and viewed markers [[storage-5](#storage-5)], late binding and identity restoration [[storage-6](#storage-6)], shared locator resolution [[storage-7](#storage-7)], source-backed library rebuilding [[storage-8](#storage-8)], and restart-safe migration with token-free Git ancestry [[storage-9](#storage-9)].
 
 ### storage-16
 
-When an integration suite merges two real Git branches containing sessions, projects and intent logs, it shall verify the stopped-writer workflow [[storage-10](#storage-10)], every whole-unit selection case including clean text merges and deletion [[storage-11](#storage-11)], orphan reporting and rejection of duplicate sources/ranks, cycles, invalid dispatches and damaged bundles [[storage-12](#storage-12)], no replay of omitted effects [[storage-13](#storage-13)], and lease exclusion of competing mutations [[storage-14](#storage-14)].
+When an integration suite merges two real Git branches containing sessions, projects and intent logs, it shall verify the stopped-writer workflow and reopening after a real Git checkout with umask `022` [[storage-10](#storage-10)], every whole-unit selection case including clean text merges and deletion [[storage-11](#storage-11)], orphan reporting and rejection of duplicate sources/ranks, cycles, invalid dispatches and damaged bundles [[storage-12](#storage-12)], no replay of omitted effects [[storage-13](#storage-13)], and lease exclusion of competing mutations [[storage-14](#storage-14)].
 
 ## References
 

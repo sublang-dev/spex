@@ -5,8 +5,8 @@
 
 ## Status
 
-Accepted (2026-09-05); implementation awaits the owner's review of the completed storage specifications.
-Amends:
+Proposed; awaiting owner review.
+Proposes amendments to:
 
 - [DR-036](036-file-state-store.md): storage ownership, default locations, local data and Git synchronization.
 - [DR-037](037-playbook-12-adoption.md): host integration and effect-ledger durability.
@@ -24,8 +24,8 @@ Amends:
 ### Ownership and format
 
 - Spex owns home and application data; Playbook owns session schemas, validation, migration, continuation and deletion for both interfaces.
-- Spex-owned durable data defaults to `${SPEX_HOME:-~/.spex}`, including `sessions/`; explicit config/store overrides prevail.
-- One core per root, one writer per session; all mutations, including migration and deletion, require the applicable lease.
+- Core-owned durable data defaults to `${SPEX_HOME:-~/.spex}`, including `sessions/`; explicit config/store overrides prevail.
+- One core per root, one writer per session; all content mutations, including migration and deletion, require the applicable lease.
 
 | Portable session file | Authority |
 | --- | --- |
@@ -49,7 +49,7 @@ Amends:
 - Migrate and write managed `playbooks.<id>.from` as config-relative paths; both hosts share resolution for loading, validation and artifact lookup. Preserve bare package specifiers; validate remaining explicit paths on the destination.
 - Only Playbook-defined relocation may adapt checkpoint project/module locators; never substitute paths in opaque snapshots or effect receipts. Unsupported relocation permits history only.
 - Retain library sources; generated files must be relocatable or rebuilt locally before use.
-- Move browser-local preferences into ignored `prefs.json`; viewed markers remain device-local and reset when history is replaced.
+- Keep layout preferences in browser storage; core-owned viewed markers remain in ignored `prefs.json` and reset when history is replaced.
 
 ### Replay compatibility
 
@@ -70,7 +70,7 @@ Amends:
 ### Git synchronization
 
 - Sync only through Git with shared ancestry: one branch per device/root, merged to/from `main`; desktop and CLI share both.
-- Stop all local writers during commit, checkout and merge; preserve exact file bytes and private store modes. Execute each session on one device at a time; leases are local.
+- Stop all local writers during commit, checkout and merge; preserve exact file bytes. Reopening tightens excess session permissions before strict validation; unsafe paths still refuse. Execute each session on one device at a time; leases are local.
 - Keep `local/`, `prefs.json`, provider hints, leases/retired guards, caches and migration inputs/receipts untracked and ignored; overrides outside the Git root do not participate.
 - Compare whole session bundles from pre-merge tips against their Git common ancestor, treating absence as deletion:
 
