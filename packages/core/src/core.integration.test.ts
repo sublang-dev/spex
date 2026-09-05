@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1291,6 +1291,146 @@ test("core-service-60: sessions another host wrote are served, bound to their pr
   );
 });
 
+test("core-service-62: CLI stream changes refresh history and subscribers without duplicating folds or writing foreign files", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "spex-foreign-refresh-"));
+  const sessionsDir = join(dir, "shared-sessions");
+  const projectDir = join(dir, "project");
+  mkdirSync(projectDir);
+  execFileSync("git", ["init", "-q", projectDir]);
+  const configPath = join(dir, "playbook.config.yaml");
+  writeFileSync(configPath, `sessions: ${sessionsDir}\n${VALID_CONFIG}`);
+  const sessionId = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+  const manifest = join(sessionsDir, `${sessionId}.json`);
+  const stream = join(sessionsDir, `${sessionId}.records.jsonl`);
+  const opening = { type: "captain_status", turnId: null, message: "ready", timestamp: 1000 };
+  writeForeignSession(sessionsDir, sessionId, projectDir, [opening]);
+  // Sorting ahead of the healthy manifest exposed the old whole-scan
+  // catch, which let one malformed neighbor hide every later session.
+  const malformed = join(sessionsDir, "00000000-0000-4000-8000-000000000000.json");
+  writeFileSync(malformed, '{"sessionId":');
+  const invalidStreamId = "00000000-0000-4000-8000-000000000001";
+  writeForeignSession(sessionsDir, invalidStreamId, projectDir, [opening]);
+  const invalidStream = join(sessionsDir, `${invalidStreamId}.records.jsonl`);
+  const invalidStreamBefore = '{"v":1,"seq":1,"record":null}\n';
+  writeFileSync(invalidStream, invalidStreamBefore);
+  const manifestBefore = readFileSync(manifest, "utf8");
+  const malformedBefore = readFileSync(malformed, "utf8");
+
+  const service = await CoreService.start({
+    token: "test",
+    configPath,
+    dataDir: join(dir, "state"),
+    env: {},
+    home: join(dir, "home"),
+    watchConfig: true,
+  });
+  const client = new Client(service.port());
+  t.after(async () => {
+    client.close();
+    await service.stop();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  await client.open();
+  await client.expectOk("project.register", { path: projectDir });
+  const initial = (await client.expectOk("session.list", {})).find((session) => session.id === sessionId);
+  assert.ok(initial, "a malformed neighbor hides no healthy session");
+  assert.equal(initial.title, undefined);
+  assert.equal(initial.turns, 0);
+  await client.expectOk("subscribe", { channel: { kind: "session", sessionId } });
+  await client.expectOk("subscribe", { channel: { kind: "debug", sessionId } });
+
+  const usage = (turnId: number, timestamp: number, input: number, output: number) => ({
+    type: "player_event",
+    playerId: "dev.coder",
+    turnId,
+    timestamp,
+    event: {
+      type: "done",
+      payload: { usage: { tokens: { totals: { input: { total: input }, output: { total: output } } }, toolUses: 1 } },
+    },
+  });
+  const firstTurn = [
+    { type: "turn_started", turnId: 1, turn: { id: 1, prompt: "first terminal turn" }, timestamp: 2000 },
+    { type: "captain_prompt", turnId: 1, prompt: "routing", visibility: "hidden", timestamp: 3000 },
+    { type: "captain_reply", turnId: 1, text: "first reply", timestamp: 4000 },
+    usage(1, 5000, 10, 4),
+    { type: "turn_finished", turnId: 1, timestamp: 6000 },
+  ];
+  const secondStart = { type: "turn_started", turnId: 2, turn: { id: 2, prompt: "second terminal turn" }, timestamp: 7000 };
+  const line = (seq: number, record: Record<string, unknown>) => JSON.stringify({ v: 1, seq, record });
+  // Only the stream changes. The parseable last record is deliberately
+  // not newline-terminated, just as a reader can catch an append.
+  appendFileSync(stream, firstTurn.map((record, index) => line(index + 2, record)).join("\n") + "\n" + line(7, secondStart));
+  // Continuing directory activity must not postpone this stream's
+  // subscriber updates until the writer goes quiet.
+  const activity = setInterval(() => writeFileSync(malformed, malformedBefore), 25);
+  try {
+    await client.waitFor((message) => message.type === "session.state" && message.session.id === sessionId && message.session.turns === 1);
+    await client.waitFor((message) => message.type === "record" && message.sessionId === sessionId && message.seq === 6);
+  } finally {
+    clearInterval(activity);
+  }
+  const first = (await client.expectOk("session.list", {})).find((session) => session.id === sessionId);
+  assert.equal(first?.title, "first terminal turn");
+  assert.equal(first?.turns, 1, "the unterminated second turn is not read");
+  const firstHistory = await client.expectOk("history.get", { sessionId });
+  assert.deepEqual(firstHistory.records.map((entry) => entry.seq), [1, 2, 4, 5, 6]);
+  assert.deepEqual(client.records("session").map((entry) => entry.seq), [2, 4, 5, 6]);
+  assert.deepEqual(client.records("debug").map((entry) => entry.seq), [3]);
+  assert.equal((await client.expectOk("usage.get", { sessionId })).inputTokens, 10);
+
+  appendFileSync(stream, "\n");
+  await client.waitFor((message) => message.type === "session.state" && message.session.id === sessionId && message.session.turns === 2);
+  await client.waitFor((message) => message.type === "record" && message.sessionId === sessionId && message.seq === 7);
+  assert.equal((await client.expectOk("history.get", { sessionId })).records.at(-1)?.seq, 7);
+  const secondEnd = [usage(2, 8000, 6, 2), { type: "turn_finished", turnId: 2, timestamp: 9000 }];
+  appendFileSync(stream, secondEnd.map((record, index) => line(index + 8, record)).join("\n") + "\n");
+  await client.waitFor((message) => message.type === "session.state" && message.session.id === sessionId && message.session.endedAt === 9000);
+  await client.waitFor((message) => message.type === "record" && message.sessionId === sessionId && message.seq === 9);
+  const completeHistory = await client.expectOk("history.get", { sessionId });
+  const expectedUsage = await client.expectOk("usage.get", { sessionId });
+  assert.equal(expectedUsage.inputTokens, 16);
+  assert.equal(expectedUsage.outputTokens, 6);
+  assert.equal(expectedUsage.toolUses, 2);
+  const announced = client.messages.filter((message) => message.type === "session.state").length;
+
+  // Registering an existing project synchronously rescans the directory.
+  // Repeated notifications/read cycles must neither inflate usage nor
+  // send the same records or unchanged session state again.
+  for (let count = 0; count < 3; count += 1) {
+    await client.expectOk("project.register", { path: projectDir });
+    assert.deepEqual(await client.expectOk("usage.get", { sessionId }), expectedUsage);
+    assert.deepEqual(await client.expectOk("history.get", { sessionId }), completeHistory);
+  }
+  assert.deepEqual(client.records("session").map((entry) => entry.seq), [2, 4, 5, 6, 7, 8, 9]);
+  assert.equal(client.messages.filter((message) => message.type === "session.state").length, announced);
+
+  // A replacement is a new readable history, not a second addition to
+  // the prior fold. It announces state but emits no invented append.
+  const replacement = [
+    opening,
+    { ...firstTurn[0], turn: { id: 1, prompt: "replaced terminal history" } },
+    ...firstTurn.slice(1),
+  ];
+  writeFileSync(stream, replacement.map((record, index) => line(index + 1, record)).join("\n") + "\n");
+  await client.waitFor((message) => message.type === "session.state" && message.session.id === sessionId && message.session.title === "replaced terminal history");
+  const replaced = (await client.expectOk("session.list", {})).find((session) => session.id === sessionId);
+  assert.equal(replaced?.turns, 1);
+  assert.equal((await client.expectOk("usage.get", { sessionId })).inputTokens, 10);
+  const replacedHistory = await client.expectOk("history.get", { sessionId });
+  assert.deepEqual(replacedHistory.records.map((entry) => entry.seq), [1, 2, 4, 5, 6]);
+  assert.deepEqual(client.records("session").map((entry) => entry.seq), [2, 4, 5, 6, 7, 8, 9]);
+
+  const streamAfterExternalWrites = readFileSync(stream, "utf8");
+  client.close();
+  await service.stop();
+  assert.equal(readFileSync(stream, "utf8"), streamAfterExternalWrites);
+  assert.equal(readFileSync(manifest, "utf8"), manifestBefore);
+  assert.equal(readFileSync(malformed, "utf8"), malformedBefore);
+  assert.equal(readFileSync(invalidStream, "utf8"), invalidStreamBefore);
+  assert.ok(!existsSync(join(sessionsDir, `${sessionId}.spex.json`)));
+});
+
 
 // ---------------------------------------------------------------------------
 // CORE-70/71: session deletion
@@ -1513,6 +1653,102 @@ function turnIds(records: StoredRecord[]): number[] {
     .filter((entry) => entry.record.type === "turn_started")
     .map((entry) => (entry.record as { turn: { id: number } }).turn.id);
 }
+
+test("core-service-22: damaged native streams remain readable but cannot continue after restart", async (t) => {
+  const harness = await startHarness();
+  let service = harness.service;
+  let client = new Client(service.port());
+  t.after(async () => {
+    client.close();
+    await service.stop();
+    rmSync(harness.dir, { recursive: true, force: true });
+  });
+  await client.open();
+  const project = await client.expectOk("project.register", { path: harness.projectDir });
+  const envelope = (seq: number, v = 1) => JSON.stringify({
+    v, seq, record: { type: "captain_status", turnId: null, timestamp: 1, message: "unfinished append" },
+  });
+  const cases = [
+    { name: "unterminated record", suffix: (seq: number) => envelope(seq) },
+    { name: "torn JSON", suffix: () => '{"v":1,"seq":' },
+    { name: "malformed complete line", suffix: () => "{broken}\n" },
+    { name: "sequence gap", suffix: (seq: number) => envelope(seq + 1) + "\n", retainSuffix: true },
+    { name: "unknown version", suffix: (seq: number) => envelope(seq, 2) + "\n" },
+    { name: "earlier incomplete marker", suffix: (seq: number) => envelope(seq), earlier: true },
+  ];
+  const damaged: {
+    id: string;
+    name: string;
+    stream: string;
+    sidecar: string;
+    bytes: string;
+    boundary: number;
+    history: CommandResults["history.get"];
+    earlier?: boolean;
+  }[] = [];
+  for (const example of cases) {
+    const session = await client.expectOk("session.create", { projectId: project.id });
+    await client.expectOk("subscribe", { channel: { kind: "session", sessionId: session.id } });
+    await client.expectOk("turn.submit", { sessionId: session.id, text: example.name });
+    await client.waitFor((message) => message.type === "record" && message.sessionId === session.id && message.record.type === "turn_finished");
+    await client.expectOk("session.dispose", { sessionId: session.id });
+    const stream = join(harness.dataDir, "sessions", `${session.id}.records.jsonl`);
+    const before = readFileSync(stream, "utf8");
+    const records = before.trimEnd().split("\n").map((line) => JSON.parse(line) as StoredRecord);
+    const lastSeq = records.at(-1)?.seq ?? 0;
+    const history = await client.expectOk("history.get", { sessionId: session.id });
+    if (example.retainSuffix) {
+      const { v: _v, ...entry } = JSON.parse(example.suffix(lastSeq + 1));
+      history.records.push(entry as StoredRecord);
+    }
+    damaged.push({
+      id: session.id,
+      name: example.name,
+      stream,
+      sidecar: join(harness.dataDir, "sessions", `${session.id}.spex.json`),
+      bytes: before + example.suffix(lastSeq + 1),
+      boundary: lastSeq - (example.earlier ? 1 : 0),
+      history,
+      earlier: example.earlier,
+    });
+  }
+  client.close();
+  await service.stop();
+  for (const example of damaged) {
+    writeFileSync(example.stream, example.bytes);
+    if (example.earlier) {
+      const meta = JSON.parse(readFileSync(example.sidecar, "utf8"));
+      meta.streamIncompleteAfterSeq = example.boundary;
+      writeFileSync(example.sidecar, JSON.stringify(meta));
+    }
+  }
+  service = await CoreService.start({
+    token: "test",
+    configPath: join(harness.dir, "playbook.config.yaml"),
+    dataDir: harness.dataDir,
+    adapterImports: fakeAdapterImports({ fallback: { result: "unexpected continuation" } }).imports,
+    adapterRuntime: () => ({ usable: true }),
+    captainFactory: async () => createScriptedCaptain(async () => {}),
+    env: {},
+    home: join(harness.dir, "home"),
+    watchConfig: false,
+  });
+  client = new Client(service.port());
+  await client.open();
+  const sessions = await client.expectOk("session.list", {});
+  for (const example of damaged) {
+    const listed = sessions.find((session) => session.id === example.id);
+    assert.equal(listed?.streamIncompleteAfterSeq, example.boundary, example.name);
+    assert.equal(listed?.continuable, undefined, example.name);
+    assert.equal(listed?.live, false, example.name);
+    assert.deepEqual(await client.expectOk("history.get", { sessionId: example.id }), example.history, example.name);
+    const refused = await client.command("turn.submit", { sessionId: example.id, text: "continue damaged history" });
+    assert.ok(!refused.ok && refused.error.code === "invalid_request", example.name);
+    assert.ok(!refused.ok && /incomplete/.test(refused.error.message), example.name);
+    assert.equal(readFileSync(example.stream, "utf8"), example.bytes, example.name);
+    assert.equal(JSON.parse(readFileSync(example.sidecar, "utf8")).streamIncompleteAfterSeq, example.boundary, example.name);
+  }
+});
 
 test("core-service-77: a message continues an ended session on the same id, after an end and after a restart, refusing what cannot continue", async () => {
   const sessionsDir = join(mkdtempSync(join(tmpdir(), "spex-continue-")), "shared-sessions");

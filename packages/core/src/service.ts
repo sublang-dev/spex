@@ -294,15 +294,15 @@ export class CoreService {
    * Serve the sessions another host wrote into the shared session
    * store (core-service-60), and forget the ones whose record left it
    * (core-service-76). Called once before serving and again whenever
-   * a captain-session record lands in or leaves that directory, so a
-   * session started in a terminal joins the app's listing and one
-   * removed there leaves it.
+   * a captain-session record or replay stream changes, so terminal
+   * sessions join the listing, keep their history current, and leave
+   * it when removed.
    */
   private syncForeignSessions(): void {
-    let adopted: string[];
+    let changed: ReturnType<Store["adoptForeignSessions"]>;
     let vanished: { id: string; projectId: string }[];
     try {
-      adopted = this.store.adoptForeignSessions(this.sessionsDir());
+      changed = this.store.adoptForeignSessions(this.sessionsDir());
       vanished = this.store.forgetVanishedForeignSessions();
     } catch {
       // Another host's directory is not ours to depend on: an
@@ -310,10 +310,17 @@ export class CoreService {
       return;
     }
     const projectIds = new Set<string>();
-    for (const sessionId of adopted) {
+    for (const { id: sessionId, appended } of changed) {
       const session = this.store.describeSession(sessionId);
       if (!session) continue;
       this.broadcast({ type: "session.state", session });
+      for (const entry of appended) {
+        this.dispatchRecord({
+          sessionId,
+          ...entry,
+          hidden: "visibility" in entry.record && entry.record.visibility === "hidden",
+        });
+      }
       projectIds.add(session.projectId);
     }
     for (const { id, projectId } of vanished) {
@@ -331,14 +338,26 @@ export class CoreService {
     const dir = this.sessionsDir();
     if (!existsSync(dir)) return;
     this.sessionsWatcher = watch(dir, (_eventType, filename) => {
-      // Our own sidecars and streams never carry a bare `<id>.json`
-      // name, so this fires for another host's records alone —
-      // arriving or vanishing.
-      if (!filename?.endsWith(".json") || filename.endsWith(".spex.json")) {
+      // The CLI can append without replacing its manifest. Our own
+      // sidecars are irrelevant, and the store excludes owned sessions
+      // when a shared stream changes. A missing filename means scan.
+      if (filename && (
+        (!filename.endsWith(".json") && !filename.endsWith(".records.jsonl")) ||
+        filename.endsWith(".spex.json")
+      )) {
         return;
       }
-      if (this.adoptTimer) clearTimeout(this.adoptTimer);
-      this.adoptTimer = setTimeout(() => this.syncForeignSessions(), 150);
+      if (filename?.endsWith(".records.jsonl")) {
+        const session = this.store.describeSession(filename.slice(0, -".records.jsonl".length));
+        if (session && !session.foreign) return;
+      }
+      // Bound the wait even while a CLI keeps writing: later events
+      // join this scan instead of postponing it until the writer stops.
+      if (this.adoptTimer) return;
+      this.adoptTimer = setTimeout(() => {
+        this.adoptTimer = undefined;
+        this.syncForeignSessions();
+      }, 150);
     });
   }
 

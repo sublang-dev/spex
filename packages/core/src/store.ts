@@ -44,6 +44,7 @@ import {
   foldTurnEvent,
   foldUsage,
   sanitizeRecord,
+  type TurnEvent,
   type UsageEntry,
   type UsageTotals,
 } from "./stream-fold.js";
@@ -204,20 +205,48 @@ function readJson<T>(file: string): T | undefined {
  * it, and the file is never mutated — the contract a lease-free reader
  * of another host's stream must honor (DR-036).
  */
-function readLinesPrefix<T>(file: string): T[] {
-  if (!existsSync(file)) return [];
+function readRecordsPrefix(file: string, retainSequenceGaps = false): { records: StoredRecord[]; incompleteAfterSeq?: number } {
+  if (!existsSync(file)) return { records: [] };
   const lines = readFileSync(file, "utf8").split("\n");
-  const out: T[] = [];
+  // A parseable last line is still uncommitted until its newline lands.
+  const unterminated = lines.pop() !== "";
+  const records: StoredRecord[] = [];
+  let lastSeq = 0;
+  let incompleteAfterSeq: number | undefined;
+  const markIncomplete = (): void => { incompleteAfterSeq ??= lastSeq; };
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      out.push(JSON.parse(trimmed) as T);
+      const value: unknown = JSON.parse(trimmed);
+      const entry = value as Partial<StoredRecord> & { v?: unknown };
+      if (
+        !entry || typeof entry !== "object" ||
+        entry.v !== 1 || typeof entry.seq !== "number" ||
+        !Number.isSafeInteger(entry.seq) || entry.seq <= lastSeq ||
+        !entry.record || typeof entry.record !== "object" ||
+        Array.isArray(entry.record) || typeof entry.record.type !== "string" ||
+        !Number.isFinite(entry.record.timestamp)
+      ) {
+        markIncomplete();
+        break;
+      }
+      if (entry.seq !== lastSeq + 1) {
+        markIncomplete();
+        // Legacy native imports can have gaps. Their later increasing
+        // records stay readable, but never certify safe continuation.
+        if (!retainSequenceGaps) break;
+      }
+      const { v: _v, ...kept } = entry;
+      records.push(kept as StoredRecord);
+      lastSeq = entry.seq;
     } catch {
+      markIncomplete();
       break;
     }
   }
-  return out;
+  if (unterminated) markIncomplete();
+  return { records, ...(incompleteAfterSeq !== undefined ? { incompleteAfterSeq } : {}) };
 }
 
 /**
@@ -227,7 +256,7 @@ function readLinesPrefix<T>(file: string): T[] {
  * newline is completed — so a later append can never glue onto damage
  * and turn a tolerated tail into permanent corruption. Only lawful
  * under the root lease: a reader without the lease uses
- * `readLinesPrefix` and mutates nothing.
+ * `readRecordsPrefix` and mutates nothing.
  */
 function readLinesHealing<T>(file: string): T[] {
   if (!existsSync(file)) return [];
@@ -538,9 +567,13 @@ export class Store {
       const meta = readJson<SessionMeta>(join(sessionsDir, file));
       if (!meta) continue;
       this.sessions.set(meta.id, meta);
-      const stored = readLinesPrefix<StoredRecord & { v?: number }>(
-        this.recordsFile(meta.id),
-      ).map(({ v: _v, ...rest }) => rest as StoredRecord);
+      const { records: stored, incompleteAfterSeq } = readRecordsPrefix(this.recordsFile(meta.id), true);
+      if (incompleteAfterSeq !== undefined) {
+        meta.streamIncompleteAfterSeq = Math.min(meta.streamIncompleteAfterSeq ?? incompleteAfterSeq, incompleteAfterSeq);
+        // Keep the raw damaged stream for inspection. The existing
+        // continuation gate refuses it instead of appending onto damage.
+        this.saveSidecar(meta);
+      }
       this.records.set(meta.id, stored);
       // Turns, titles, and usage are never separately stored: the
       // stream is the truth and the restart folds it (core-service-10).
@@ -555,27 +588,46 @@ export class Store {
    * store's directory (core-service-60): a playbook captain-session
    * record `<id>.json` names the working directory, and the replay
    * stream `<id>.records.jsonl` beside it carries the history. A
-   * session is adopted once, bound to the registered project whose
-   * path is that working directory; one matching no project is left
-   * alone, and one this core already holds is never re-read. Returns
-   * the ids newly adopted.
+   * session binds to the registered project whose path is that working
+   * directory. Foreign sessions refresh from the readable prefix;
+   * sessions this core owns are never replaced. Returns changes only,
+   * with new records to stream where the prior history is a prefix.
    */
-  adoptForeignSessions(sessionsDir: string): string[] {
+  adoptForeignSessions(sessionsDir: string): { id: string; appended: StoredRecord[] }[] {
     if (!existsSync(sessionsDir)) return [];
-    const adopted: string[] = [];
+    const changed: { id: string; appended: StoredRecord[] }[] = [];
     for (const file of readdirSync(sessionsDir)) {
       // Our own sidecars end `.spex.json`; a captain-session record is
       // `<id>.json`, and every other file in the directory is theirs.
       if (!file.endsWith(".json") || file.endsWith(".spex.json")) continue;
       const id = file.slice(0, -".json".length);
-      if (this.sessions.has(id)) continue;
-      const record = readJson<{
+      const previousMeta = this.sessions.get(id);
+      if (previousMeta && !previousMeta.foreign) continue;
+      let record: {
         sessionId?: unknown;
         cwd?: unknown;
         createdAt?: unknown;
         updatedAt?: unknown;
         snapshot?: { journal?: unknown };
-      }>(join(sessionsDir, file));
+      } | undefined;
+      let stored: StoredRecord[];
+      try {
+        record = readJson(join(sessionsDir, file));
+        const stream = join(sessionsDir, `${id}.records.jsonl`);
+        // A legacy record with no replay stream carries the Boss
+        // conversation in its journal. An unfinished stream is not
+        // permission to replace its history with synthetic records.
+        stored = [];
+        if (existsSync(stream)) {
+          stored = readRecordsPrefix(stream).records;
+        } else if (record) {
+          stored = journalRecords(record);
+        }
+      } catch {
+        // A malformed or concurrently replaced neighbor cannot hide
+        // healthy sessions, or erase its own last readable history.
+        continue;
+      }
       if (
         !record ||
         typeof record.cwd !== "string" ||
@@ -585,14 +637,18 @@ export class Store {
       }
       const project = this.getProjectByPath(record.cwd);
       if (!project) continue;
-      let stored = readLinesPrefix<StoredRecord & { v?: number }>(
-        join(sessionsDir, `${id}.records.jsonl`),
-      ).map(({ v: _v, ...rest }) => rest as StoredRecord);
-      // A record written before the CLI teed its stream carries the
-      // Boss conversation in its journal: every prompt and reply, which
-      // is the history worth listing (core-service-60).
-      if (stored.length === 0) stored = journalRecords(record);
       if (stored.length === 0) continue;
+      let folds: { turn: TurnEvent | undefined; usage: UsageEntry | undefined }[];
+      try {
+        folds = stored.map((entry) => ({
+          turn: foldTurnEvent(entry.record),
+          usage: foldUsage(id, entry.record),
+        }));
+      } catch {
+        // A malformed event payload is isolated before replacing any
+        // already served metadata or folds for this session.
+        continue;
+      }
       const players = [
         ...new Set(
           stored
@@ -600,7 +656,7 @@ export class Store {
             .filter((playerId): playerId is string => typeof playerId === "string"),
         ),
       ];
-      this.sessions.set(id, {
+      const meta: SessionMeta = {
         id,
         projectId: project.id,
         createdAt: stored[0].record.timestamp,
@@ -614,12 +670,26 @@ export class Store {
         // (core-service-65); a deletion reaches them here (DR-042).
         foreign: true,
         originDir: sessionsDir,
-      });
+      };
+      const previous = this.records.get(id) ?? [];
+      const previousLines = previous.map((entry) => JSON.stringify(entry));
+      const nextLines = stored.map((entry) => JSON.stringify(entry));
+      const extendsPrefix = previousLines.every((line, index) => line === nextLines[index]);
+      if (
+        previousMeta &&
+        extendsPrefix && previous.length === stored.length &&
+        JSON.stringify(previousMeta) === JSON.stringify(meta)
+      ) continue;
+      this.sessions.set(id, meta);
       this.records.set(id, stored);
-      for (const entry of stored) this.foldRecord(id, entry.record);
-      adopted.push(id);
+      // Re-fold replacement history from zero, so re-reading a CLI
+      // session never counts its previous usage a second time.
+      this.turns.delete(id);
+      this.usage.delete(id);
+      for (const fold of folds) this.applyRecordFold(id, fold.turn, fold.usage);
+      changed.push({ id, appended: extendsPrefix ? stored.slice(previous.length) : [] });
     }
-    return adopted;
+    return changed;
   }
 
   /**
@@ -689,7 +759,10 @@ export class Store {
   }
 
   private foldRecord(sessionId: string, record: TmuxPlayRecord): void {
-    const turnEvent = foldTurnEvent(record);
+    this.applyRecordFold(sessionId, foldTurnEvent(record), foldUsage(sessionId, record));
+  }
+
+  private applyRecordFold(sessionId: string, turnEvent: TurnEvent | undefined, usage: UsageEntry | undefined): void {
     if (turnEvent) {
       if (turnEvent.kind === "start") {
         this.startTurnInMemory(sessionId, turnEvent.turnId, turnEvent.prompt, turnEvent.at);
@@ -697,7 +770,6 @@ export class Store {
         this.endTurnInMemory(sessionId, turnEvent.turnId, turnEvent.status, turnEvent.at);
       }
     }
-    const usage = foldUsage(sessionId, record);
     if (usage) this.usageOf(sessionId).push(usage);
   }
 

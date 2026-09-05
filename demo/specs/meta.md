@@ -50,6 +50,13 @@ A record's ID shall join its kind prefix to its filename's leading number — `D
 
 A DR shall record design decisions and constraints, not implementation details, sufficient to provide context for or to audit the corresponding spec items.
 
+### meta-35
+
+When a substantive change to an accepted decision is accepted, the specs shall record it in a new DR, preserving the earlier decision and rationale and linking both records' status sections with the affected scope [[meta-4](#meta-4)] [[meta-16](#meta-16)]:
+
+- Whole replacement: the earlier DR is superseded.
+- Partial replacement: the earlier DR remains accepted with a scoped amendment.
+
 ### meta-28
 
 An IR shall be disposable: it contains nothing a DR or a spec item should cover, and its deletion loses no design or behavior record.
