@@ -9,8 +9,9 @@
 // registry's state ids by FSM introspection.
 
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 
@@ -149,6 +150,8 @@ export interface CompileOptions {
   command: string;
   intent: string;
   libraryDir: string;
+  /** Primary config path; supplied by the app to return a portable locator. */
+  configPath?: string;
   env?: NodeJS.ProcessEnv;
   spawner?: LineSpawner;
   onProgress?: (line: string) => void;
@@ -459,7 +462,7 @@ function wrapperSource(options: CompileOptions, entryModulePath: string): string
 // slot that binds to a session player, not a host player id, so the
 // entry's role ids pass through exactly as the gears declared them —
 // the lowercasing and re-casing shim of the v7 host boundary is gone.
-import entry from ${JSON.stringify(entryModulePath)};
+import entry from ${JSON.stringify(`./${options.playbookId}.ts`)};
 
 export const spexRegistryContract = ${REGISTRY_CONTRACT};
 
@@ -608,5 +611,26 @@ export async function compilePlaybook(
 
   signal?.throwIfAborted();
   progress("compile complete");
-  return { from: registryBundle, roles, ...ids };
+  const locator = options.configPath ? relative(dirname(options.configPath), registryBundle).split("\\").join("/") : registryBundle;
+  const from = options.configPath && !locator.startsWith(".") ? `./${locator}` : locator;
+  return { from, roles, ...ids };
+}
+
+/** Rebuild bundles from retained compiler outputs without invoking an agent. */
+export async function rebuildManagedRegistry(libraryDir: string, id: string): Promise<void> {
+  const directory = resolve(libraryDir, id);
+  if (existsSync(join(directory, `${id}.registry.mjs`))) return;
+  const source = join(directory, `${id}.md`); const entry = join(directory, `${id}.ts`);
+  const wrapper = join(directory, `${id}.registry.ts`);
+  if (!existsSync(source) || !existsSync(entry) || !existsSync(wrapper)) throw new Error(`playbook ${id} is unavailable: retained source or compiler output is missing; compile it in Playbooks`);
+  const temporary = mkdtempSync(join(tmpdir(), "spex-library-rebuild-"));
+  try {
+    const bundled = join(temporary, "entry.mjs");
+    await build({ entryPoints: [wrapper], outfile: bundled, bundle: true, format: "esm", platform: "node", logLevel: "silent", nodePaths: bundleNodePaths() });
+    const module = await import(pathToFileURL(bundled).href);
+    if (!isValidRegistryEntry(module.default) || module.default.id !== id) throw new Error(`retained registry ${id} is invalid`);
+    await compilePlaybook({ playbookId: id, source: {}, roles: [...module.default.requiredRoleIds], command: module.default.command, intent: module.default.intent, libraryDir, skipSlc: true });
+  } catch (error) {
+    throw new Error(`playbook ${id} is unavailable: rebuilding failed: ${(error as Error).message}`);
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
 }

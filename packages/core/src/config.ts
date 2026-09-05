@@ -21,7 +21,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import {
@@ -159,6 +159,8 @@ export interface HostRoleBinding {
 
 export interface ComposedPlaybook {
   id: string;
+  /** Command declared by the registry before the config override. */
+  manifestCommand: string;
   command: string;
   intent: string;
   requiredRoleIds: readonly string[];
@@ -213,6 +215,17 @@ export type LoadModule = (specifier: string) => Promise<unknown>;
  * and file URLs pass through; bare specifiers resolve from Spex's
  * dependencies first, then from configured checkouts.
  */
+export function isFileModule(specifier: string): boolean {
+  return specifier.startsWith(".") || specifier.startsWith("/") || specifier.startsWith("~/") || specifier.startsWith("file:") || /^[A-Za-z]:[\\/]/.test(specifier);
+}
+
+/** File locators use the primary config's directory in both hosts. */
+export function resolveConfigModule(specifier: string, configPath: string, home = homedir()): string {
+  if (specifier.startsWith("file:")) return fileURLToPath(specifier);
+  if (specifier.startsWith("~/")) return resolve(home, specifier.slice(2));
+  return isFileModule(specifier) ? resolve(dirname(configPath), specifier) : specifier;
+}
+
 export function resolveModulePath(
   specifier: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -303,7 +316,7 @@ export function resolveConfigPath(
  * for both hosts, resolved as the launcher resolves it — `~` expanded,
  * an absolute path taken as given, anything else relative to the
  * config's own directory — and defaulting to the launcher's own XDG
- * state location when the key is absent.
+ * Spex home when the key is absent.
  */
 export function resolveSessionsDir(
   configPath: string,
@@ -329,8 +342,8 @@ export function resolveSessionsDir(
       return isAbsolute(value) ? value : join(dirname(configPath), value);
     }
   }
-  const stateHome = env.XDG_STATE_HOME || join(home, ".local", "state");
-  return join(stateHome, "playbook", "sessions");
+  const spexHome = env.SPEX_HOME?.trim() ? env.SPEX_HOME : join(home, ".spex");
+  return join(spexHome, "sessions");
 }
 
 /**
@@ -680,7 +693,8 @@ function sessionAgentOf(agent: ResolvedAgent): SessionAgentBlock {
 
 export async function composeConfig(
   top: unknown,
-  loadModule: LoadModule = (specifier) => import(specifier),
+  loadModule: LoadModule = (specifier) => import(isAbsolute(specifier) ? pathToFileURL(specifier).href : specifier),
+  configPath?: string,
 ): Promise<ComposedConfig> {
   if (!isPlainObject(top)) {
     throw new Error("config must be a YAML mapping");
@@ -766,11 +780,12 @@ export async function composeConfig(
       throw new Error(`playbooks.${id} must be an object`);
     }
     const block = blockValue;
-    const from = block.from;
-    if (typeof from !== "string" || from.length === 0) {
+    const configuredFrom = block.from;
+    if (typeof configuredFrom !== "string" || configuredFrom.length === 0) {
       throw new Error(`playbooks.${id}.from must be a module specifier`);
     }
 
+    const from = configPath ? resolveConfigModule(configuredFrom, configPath) : configuredFrom;
     let moduleValue: unknown;
     try {
       moduleValue = await loadModule(from);
@@ -937,6 +952,7 @@ export async function composeConfig(
 
     playbooks.push({
       id: entry.id,
+      manifestCommand: entry.command,
       command,
       intent: entry.intent,
       requiredRoleIds: entry.requiredRoleIds,
@@ -979,6 +995,7 @@ export interface LoadedConfig {
 export async function loadConfig(
   path: string,
   loadModule?: LoadModule,
+  options: { libraryDir?: string } = {},
 ): Promise<LoadedConfig> {
   // A profiles-era file migrates in place first (DR-019, launcher
   // parity): the shared config composes whichever host loads it, and
@@ -997,7 +1014,16 @@ export async function loadConfig(
   }
   const text = readFileSync(path, "utf8");
   const raw: unknown = parseYaml(text);
-  const composed = await composeConfig(raw, loadModule);
+  if (options.libraryDir && isPlainObject(raw) && isPlainObject(raw.playbooks)) {
+    for (const [id, block] of Object.entries(raw.playbooks)) {
+      if (!isPlainObject(block) || typeof block.from !== "string") continue;
+      const from = resolveConfigModule(block.from, path);
+      if (from !== resolve(options.libraryDir, id, `${id}.registry.mjs`) || existsSync(from)) continue;
+      const { rebuildManagedRegistry } = await import("./compile.js");
+      await rebuildManagedRegistry(options.libraryDir, id);
+    }
+  }
+  const composed = await composeConfig(raw, loadModule, path);
   return { path, raw, composed };
 }
 

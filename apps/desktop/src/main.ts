@@ -126,7 +126,7 @@ async function main(): Promise<void> {
   // userData store rides along for the core's one-time import.
   const dataDir = isolatedUserData
     ? join(isolatedUserData, "spex-home")
-    : process.env.SPEX_HOME || join(homedir(), ".spex");
+    : process.env.SPEX_HOME?.trim() ? process.env.SPEX_HOME : join(homedir(), ".spex");
   service = await CoreService.start({
     dataDir,
     legacyDbPath: join(app.getPath("userData"), "spex.db"),

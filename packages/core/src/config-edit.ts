@@ -11,6 +11,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parseDocument, YAMLMap, isMap, isScalar } from "yaml";
 
 import { composeConfig, type LoadModule } from "./config.js";
+import { writeApplicationBytes } from "./app-storage.js";
 
 export interface AgentBlock {
   adapter: string;
@@ -214,14 +215,14 @@ export async function editConfigFile(
   const candidate = applyConfigOp(text, op);
   try {
     const parsed = parseDocument(candidate).toJS() as unknown;
-    await composeConfig(parsed, loadModule);
+    await composeConfig(parsed, loadModule, path);
   } catch (error) {
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),
     };
   }
-  writeFileSync(path, candidate);
+  writeApplicationBytes(path, candidate);
   return { ok: true };
 }
 

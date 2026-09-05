@@ -83,7 +83,7 @@ export interface RunningServer {
 }
 
 export function defaultDataDir(env: NodeJS.ProcessEnv): string {
-  return env.SPEX_HOME || join(env.HOME ?? homedir(), ".spex");
+  return env.SPEX_HOME?.trim() ? env.SPEX_HOME : join(env.HOME ?? homedir(), ".spex");
 }
 
 /** The pre-DR-036 store this shell used, handed over for the one-time

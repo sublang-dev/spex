@@ -13,7 +13,9 @@
 // the config; a MIGRATION_NOTE heads the rewritten file.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { parseDocument } from "yaml";
+import { isMap, isScalar, parseDocument } from "yaml";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { migrateApplicationFile } from "./app-storage.js";
 import type { Document, Pair, Scalar, YAMLMap } from "yaml";
 
 const MIGRATION_NOTE =
@@ -195,4 +197,26 @@ export function migrateConfigFileIfRetired(
   writeFileSync(backupPath, text, { mode: 0o600 });
   writeFileSync(configPath, migrated);
   return { migrated: true, backupPath };
+}
+
+/** Convert only managed absolute locators whose target stays identical. */
+export function migrateManagedLibraryConfig(configPath: string, libraryDir: string, spexHome: string): void {
+  migrateApplicationFile(spexHome, configPath, (original) => {
+    const document = parseDocument(original);
+    if (document.errors.length) return original;
+    const playbooks = document.get("playbooks"); if (!isMap(playbooks)) return original;
+    let changed = false;
+    for (const entry of playbooks.items) {
+      if (!isMap(entry.value)) continue;
+      const from = entry.value.get("from", true);
+      if (!isScalar(from) || typeof from.value !== "string" || !isAbsolute(from.value)) continue;
+      const target = resolve(from.value); const local = relative(resolve(libraryDir), target);
+      if (local === ".." || local.startsWith(`..${sep}`) || isAbsolute(local) || !existsSync(target)) continue;
+      const locator = relative(dirname(configPath), target).split(sep).join("/");
+      const next = locator.startsWith(".") ? locator : `./${locator}`;
+      if (resolve(dirname(configPath), next) !== target) continue;
+      from.value = next; changed = true;
+    }
+    return changed ? document.toString({ flowCollectionPadding: false }) : original;
+  });
 }
