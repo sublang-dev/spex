@@ -3,127 +3,134 @@
 
 # The `~/.spex` catalog
 
-This catalog describes the storage contract in [DR-045](../specs/decisions/045-unified-session-storage.md).
-Implementation is pending; the [current inventory](design/unified-storage.md) records today's layout.
+**Spex home** is the shared data directory for desktop and CLI.
+It defaults to `~/.spex`; `SPEX_HOME` selects another directory.
+Explicit paths for configuration and session storage replace their respective defaults.
+All paths below are relative to Spex home; files stored elsewhere are outside its Git repository.
 
-One home holds Spex's durable core data and the sessions shared by desktop and CLI.
-Paths below are relative to `${SPEX_HOME:-~/.spex}`; explicit config/store overrides prevail, and files outside this root do not participate in its Git history.
+## File catalog
 
-## Files at a glance
+A **session bundle** is one session's manifest and matching replay stream.
+Synchronization selects both files from the same revision or deletes both; it never merges them independently.
+Git does not enforce this relationship.
 
-“Local” means untracked and ignored by Git, not necessarily disposable.
+Ignored files can contain durable local state.
 
-| Path or file family | Contents | Git |
+| Path | Contents | Git |
 | --- | --- | --- |
-| `playbook/playbook.config.yaml` | Shared Captain, player and playbook settings; presentation settings; session location. | Track |
-| `projects.json` | Version 2: project ID, name and registration time; no machine paths. | Track |
-| `intents/<projectId>.jsonl` | Ordered acts: queue, edit, move, link, dispatch, close and remove. | Track |
-| `sessions/<id>.json` | Schema 7: identity, recorded `cwd`, checkpoint, recovery evidence and replay digest. | Track with its stream |
-| `sessions/<id>.records.jsonl` | Captain/player history, visibility, settings, bindings and graph definitions. | Track with its manifest |
-| `playbooks/<id>/` | Library sources and generated modules/artifacts. | Track sources; omit outputs only with local rebuilding |
-| `local/project-paths.json` | Project IDs mapped to current absolute paths and recorded-path aliases. | Local |
-| `prefs.json` | Core preferences and per-session viewed markers. | Local |
-| `forge-cache.json` | Version 1: cached forge work lists; rebuildable. | Local |
-| `meta.json`, `local/migrations/<id>/` | Legacy import markers; new `receipt.json` and original bytes under `inputs/`. | Local |
-| Config backups | Original configuration files. | Local |
-| `sessions/<id>.hints.json` | Version 1: optional Captain/player tokens bound to the exact manifest digest. | Local |
-| `.lock/`, `sessions/.<id>.lock/`, staging and retired lease directories | Writer coordination and protection against delayed reclaimers. | Local |
-| Temporary atomic-write files | In-progress publication of a replacement file. | Local |
+| `playbook/playbook.config.yaml` | Shared Captain, player, playbook and presentation settings; session directory. | Tracked |
+| `projects.json` | Project IDs, names and registration times. | Tracked |
+| `intents/<projectId>.jsonl` | Ordered intent changes. | Tracked |
+| `sessions/<id>.json` | Schema-7 manifest: identity, `cwd`, checkpoint and recovery evidence. | Tracked |
+| `sessions/<id>.records.jsonl` | Captain/player records, historical settings, role bindings and graphs. | Tracked |
+| `playbooks/<id>/` | Library sources and generated modules/artifacts. | Sources tracked; outputs omitted only if rebuildable locally |
+| `local/project-paths.json` | Project IDs mapped to local paths and recorded `cwd` aliases. | Ignored |
+| `prefs.json` | Core preferences, including the last viewed turn per session. | Ignored |
+| `forge-cache.json` | Rebuildable issue and pull-request cache. | Ignored |
+| `meta.json`, `local/migrations/<id>/` | Migration receipts and original inputs. | Ignored |
+| Config backups | Original configuration files. | Ignored |
+| `sessions/<id>.hints.json` | Provider resume tokens for the current checkpoint. | Ignored |
+| `.lock/`, `sessions/.<id>.lock/`, staging and retired lease directories | Exclusive writer ownership and safe stale-lock recovery. | Ignored |
+| Atomic-write temporary files | Pending file replacements. | Ignored |
 
-Spex owns application data; Playbook owns session validation, migration, continuation and deletion for both interfaces.
-One core serves a root; one writer owns a session; mutations require the applicable lease.
-Git also maintains its own `.git/` metadata.
-Tracked `.gitignore` and `.gitattributes` enforce the exclusions and preserve JSON/JSONL bytes without line-ending conversion.
+Spex owns application data; Playbook owns session validation, migration, continuation and deletion.
+One core serves each Spex home; one writer owns each session.
+Writes require the corresponding lease.
 
-## What a session preserves
+## Session contents
 
-The **manifest** preserves the checkpoint, recovery journal, external-action evidence and unresolved work.
-Recovery evidence is written before external actions and retained independently of the transcript.
-The checkpoint binds to an exact history prefix by sequence and digest.
-Its state is settled, uncertain, or history-only; a readable transcript alone cannot establish safe continuation.
+The **manifest** stores recovery state: the checkpoint, journal, unresolved work and effect ledger used to reconcile external actions.
+Recovery evidence is durable before external actions run, independently of transcript writes.
+The checkpoint identifies an exact replay prefix by sequence and digest.
+Its state is `settled`, `uncertain` or `history-only`; transcript completeness alone does not establish safe continuation.
 
-The **stream** preserves Captain/player history, including hidden records, and immutable context: participants, settings, bindings and state-machine definitions.
-Events and checkpoints reference that context; activity, summaries and usage are derived.
-Historical graphs need no installed playbook module.
+The **replay stream** contains Captain/player records, including hidden records, and immutable execution context: participants, settings, role bindings and state-machine definitions.
+Events and checkpoints reference that context, allowing historical graphs to render without installed playbook modules.
+Activity, summaries and usage are derived from records.
+Valid unknown record kinds and headerless legacy records are not corruption.
+Unsupported recovery versions allow history viewing and deletion, but no continuation; older writers preserve their bytes.
 
-Each complete UTF-8 JSON line uses the closed v1 envelope; a record following context at sequence 1 can look like:
+**Provider hints** are local resume tokens bound to one participant and the exact manifest bytes.
+A hint is deleted and the deletion synced before use; replacement hints are written only after the resulting checkpoint.
+This prevents stale reuse after a crash or rollback.
+Missing hints start fresh conversations from the Captain's journal or the player's complete task prompt.
+Definite rejection before execution permits one fresh attempt; ambiguous failures never retry automatically.
+Provider-only knowledge is unavailable, while pending operations retain their player identity and effect evidence.
 
-```json
-{"v":1,"seq":2,"role":"coder","record":{"type":"player_prompt","timestamp":1788566400000,"contextSeq":1,"playerId":"dev.coder","prompt":"Review the change"}}
-```
+## Git synchronization
 
-- `seq` increases contiguously from `1`; `role` is an optional string; no other envelope keys are allowed.
-- `record` is a token-free JSON object. Legacy objects need no presentation header; new context/reset kinds require a string `type` and finite numeric `timestamp`.
-- Unknown valid records count toward sequence/digest checks but may have no presentation; they are not damage.
-- Unsupported recovery context/checkpoints permit history only; older writers leave unknown versions unchanged.
+Track portable files only after migration removes provider tokens from recovery fields.
+Original migration inputs and unsupported files remain ignored.
+Tracked `.gitignore` rules exclude local data; `.gitattributes` disables line-ending conversion for JSON/JSONL files.
 
-Local hints bind to an exact participant/checkpoint.
-They are consumed durably before use and renewed only after the resulting checkpoint, preventing reuse after a crash or rollback.
-Missing hints start fresh conversations from Captain's journal or the player's complete task prompt; provider-only knowledge is lost.
-Definite pre-execution session rejection permits one fresh attempt; ambiguous failures never auto-retry.
-Deferred operations retain player identity and effect evidence without a provider token.
+Use one branch per device's Spex home, shared by desktop and CLI and merged to or from `main`.
+Stop local writers during commit, checkout and merge.
+Run each session on at most one device at a time; leases are local.
 
-## Sharing through Git
+Compare each session bundle in both pre-merge revisions with the common ancestor:
 
-Start shared Git ancestry **after migration removes all provider tokens from portable recovery bindings**; originals and unsupported inputs stay ignored.
-Use one branch per device/root, shared by desktop and CLI, merged to/from `main`.
-Stop local writers during commit, checkout and merge; execute each session on one device at a time.
-Reopening tightens verified user-owned session directories/files to `0700`/`0600` before strict validation; unsafe paths still refuse.
-A private `077` Git umask avoids exposure before reopening.
-
-Compare each complete session bundle with the common ancestor:
-
-| Changes | Result |
+| Changes | Selection |
 | --- | --- |
-| Neither side changed, or both agree | Keep the agreed bundle or deletion. |
-| Only one side changed | Take that bundle or deletion. |
-| Both changed differently | Explicitly choose the entire session from ours or theirs. |
+| Neither side changed, or both agree | Agreed session or deletion |
+| Only one side changed | That session or deletion |
+| Both changed differently | Explicit whole-session choice from either branch |
 
-The manifest and stream are inseparable, even after a clean text merge.
-Apply the same rule per file to config, projects and intent logs.
-Unselected history/acts leave active state but remain in Git ancestry; divergent conversations are never combined.
+The bundle rule applies even after a clean text merge.
+Apply the same selection rule to each configuration file, project registry and intent log as an individual file.
+Unselected changes leave active state but remain recoverable from Git history.
 Git's text merge alone does not enforce these rules.
 
-Before reopening, validate intent source uniqueness, queue order and acyclic links against the chosen histories.
-Report unresolved paths and missing project IDs; preserve their files unlisted without automatic registration.
-Reconcile omitted executed work before continuing: Git cannot undo external effects.
+Before reopening, validate the selected files and intent logs for duplicate sources or queue ranks, dependency cycles and invalid session/turn references.
+Report unresolved project paths and missing project IDs; retain their files unlisted without automatic registration.
+Before continuing, reconcile repository state and completed external actions with the selected checkpoint.
+Git selection cannot undo actions recorded only in the unselected history.
 
-## Opening on another device
+Reopening tightens verified user-owned session directories to `0700` and files to `0600` before strict validation; unsafe paths are rejected.
+Use `umask 077` for Git writes to prevent exposure before reopening.
 
-Bind existing project IDs to local paths and recorded-path aliases; restore missing identities from Git ancestry rather than minting replacements.
-Assume each recorded path names one project across devices; unresolved or conflicting bindings require an explicit choice.
+## Cross-device continuation
 
-Managed playbook `from` paths are config-relative; bare package specifiers stay unchanged.
+Map existing project IDs to local repository paths and aliases for recorded working directories.
+Restore missing registrations from Git ancestry rather than creating replacement IDs.
+Each recorded path must identify the same project across devices; unresolved or conflicting mappings require explicit selection.
+
+Managed playbook `from` paths are relative to the primary configuration directory; package specifiers remain unchanged.
 Validate other paths and rebuild nonportable generated files before use.
 
-**Aliases bind history only.**
-The initial format supports no checkpoint path relocation: different repository/module paths mean history only—even with fresh agent conversations.
+Aliases associate history with a project; they do not authorize checkpoint relocation.
+**Schema 7 does not relocate checkpoint paths.**
+Different repository or module paths permit history only, even with fresh provider conversations.
 Matching paths still require compatible runtimes and repository/effect reconciliation.
 
-## Deletion and local data
+## Deletion
 
-Under the session lease, deletion removes the stream, hints, active legacy sidecar and derived state, then the manifest last.
-Interrupted cleanup is retryable; incomplete bundles cannot resume.
-Active or unprovable ownership refuses deletion; retired lease guards remain.
-Git records deletions, including delete-versus-modify choices.
+With the session lease held, delete replay, hints, any active legacy sidecar and derived session state, then the manifest last.
+Interrupted cleanup is retryable; incomplete bundles cannot continue.
+Deletion fails if another writer is active or exclusive ownership cannot be proven.
+Retired lease directories remain so delayed stale-lock recovery cannot affect a new owner.
+If one branch deletes a session and another modifies it, synchronization requires an explicit choice between deletion and the complete modified bundle.
 
-Project removal leaves session and intent files for explicit recovery.
-Viewed markers reset when history is replaced.
-Caches rebuild; preferences, bindings and migration records preserve local state outside Git.
+Project removal retains session and intent files for explicit recovery.
+Replacing session history resets its last-viewed turn.
+Local preferences, path bindings and migration records are excluded from Git; caches are rebuildable.
 
-Repositories and their effect claims, installed runtimes, provider credentials/history and browser-engine profiles remain external.
-Rail, split, expansion, frame and other layout preferences stay in browser storage; no core preference API or migration is added.
+## External data
+
+Project repositories and their effect claims, installed runtimes, provider credentials/history and browser profiles remain external.
+Layout preferences stay in browser storage.
 Unsaved drafts and access tokens are not portable session state.
 
-## Migration and contract owners
+## Migration and definitions
 
-Stop old writers before replacing desktop sidecars with shared manifests; CLI schemas 2–5 and incompatible desktop checkpoints remain history only.
-Legacy tokens are not promoted to usable hints because their checkpoint binding cannot be proven.
+Stop legacy writers before replacing desktop sidecars with shared manifests.
+CLI schemas 2–5 and desktop checkpoints without compatible recovery data remain history only.
+Legacy provider tokens cannot become usable hints because their checkpoint binding is unproven.
 
-Each contract is defined once; this catalog explains their combined layout.
+[DR-045](../specs/decisions/045-unified-session-storage.md) records the design and rationale.
+Exact formats and behavior are defined by their owning packages:
 
-| Owner | Authoritative definition |
+| Owner | Definition |
 | --- | --- |
-| Spex | [Home files, bindings, migration and Git selection](../specs/packages/storage.md) |
-| Playbook | [Session schema, context, hints and recovery](https://github.com/sublang-ai/playbook/blob/main/specs/packages/session-storage.md) |
-| Cligent | [Definite pre-execution resume rejection](https://github.com/sublang-ai/cligent/blob/main/specs/packages/engine.md#engine-84) |
+| Spex | [Home files, project bindings, migration and Git selection](../specs/packages/storage.md) |
+| Playbook | [Session format, context, hints and recovery](https://github.com/sublang-ai/playbook/blob/main/specs/packages/session-storage.md) |
+| Cligent | [Definite provider session rejection](https://github.com/sublang-ai/cligent/blob/main/specs/packages/engine.md#engine-84) |
