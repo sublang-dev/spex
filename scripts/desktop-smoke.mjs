@@ -8,7 +8,8 @@
 // live /code dispatch with real agents, abort, teardown. Requires a
 // locally signed-in Claude adapter; NOT hermetic, NOT for CI. The
 // driver owns the native-ABI flip to Electron and restores it on
-// every exit path (skip flip with SPEX_SMOKE_ABI_READY=1).
+// every exit path (skip flip with SPEX_SMOKE_ABI_READY=1). An unchanged
+// successful build can be reused with SPEX_SMOKE_BUILD_READY=1.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -82,7 +83,11 @@ try {
   }
 
   at("build");
-  run("npm", ["run", "build", "-w", "apps/desktop"]);
+  if (process.env.SPEX_SMOKE_BUILD_READY === "1") {
+    say("reusing the prepared desktop build (SPEX_SMOKE_BUILD_READY=1)");
+  } else {
+    run("npm", ["run", "build", "-w", "apps/desktop"]);
+  }
 
   at("launch");
   scratch = mkdtempSync(join(tmpdir(), "spex-desktop-smoke-"));

@@ -40,6 +40,10 @@ names its stage.
 npm run smoke:desktop
 ```
 
+After a successful build, use `SPEX_SMOKE_BUILD_READY=1 npm run
+smoke:desktop` only while its source, dependencies and build settings
+remain unchanged. This reuses the build; ABI setup and restoration still run.
+
 Boots the real desktop app against a scratch home and walks the
 critical path over the app's own socket: seeded config valid →
 Academy seeds and parses → session starts → a minimal `/code` turn
