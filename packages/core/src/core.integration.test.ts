@@ -2165,12 +2165,12 @@ for (const action of ["retry", "discard"] as const) {
     const {imports, stats} = fakeAdapterImports({fallback: {result: "recovered answer"}});
     const shared = createSessionStore({sessionsDir});
     const cli = await openSessionHost({store: shared, mode: "new", cwd: projectPath, config, adapterImports: imports});
+    t.after(() => cli.dispose());
     const sessionId = cli.sessionId;
-    // The CLI has durably admitted input, then exits before any agent call.
+    // Uncertainty under an active CLI lease is not interrupted work.
     await cli.lease.beginTurn({input: "saved CLI input", attemptId: randomUUID(), attemptedExecutionProjection: config});
-    await cli.dispose();
     writeFileSync(configPath, "captain: [invalid current config]\n");
-    const service = await CoreService.start({token:"test", configPath, dataDir, adapterImports:imports, env:{}, watchConfig:false});
+    const service = await CoreService.start({token:"test", configPath, dataDir, adapterImports:imports, env:{}, watchConfig:true});
     t.after(async () => { await service.stop(); rmSync(dir, {recursive:true,force:true}); });
     const client = new Client(service.port());
     t.after(() => client.close());
@@ -2179,7 +2179,13 @@ for (const action of ["retry", "discard"] as const) {
     const project = await client.expectOk("project.register", {path:projectPath});
     const session = (await client.expectOk("session.list", {})).find((item) => item.id === sessionId);
     assert.equal(session?.projectId, project.id);
-    assert.deepEqual(session?.recovery, {state:"uncertain", input:"saved CLI input"});
+    assert.equal(session?.externalWriter,"active");
+    assert.equal(session?.live,true);
+    assert.equal(session?.recovery,undefined);
+    assert.equal((await client.command(`session.${action}`,{sessionId})).ok,false);
+    // Releasing only the lease must reveal recovery without a stream write.
+    await cli.dispose();
+    await client.waitFor((message) => message.type === "session.state" && message.session.id === sessionId && message.session.recovery?.input === "saved CLI input" && !message.session.externalWriter);
     const blocked = await client.command("turn.submit", {sessionId, text:"replacement input"});
     assert.equal(blocked.ok, false, "ordinary input cannot retry uncertainty");
     assert.equal(stats.runs.length, 0);
@@ -2189,6 +2195,7 @@ for (const action of ["retry", "discard"] as const) {
     assert.equal(busy.ok, false);
     assert.equal(stats.runs.length, 0);
     await holder.release();
+    await client.expectOk("project.register",{path:projectPath});
     if (action === "retry") {
       await client.expectOk("subscribe", {channel:{kind:"session",sessionId}});
       await client.expectOk("session.retry", {sessionId});

@@ -101,6 +101,7 @@ When a client requests the session list, the core service shall reply with every
 - each entry carries the session's resolved project, creation and end times, liveness and `turnActive`, which stays true until the turn transaction settles or fails; host of origin is not an admission condition;
 - each entry says whether a Boss message continues it, using the shared checkpoint, replay and execution checks [[core-service-73](#core-service-73)], with a reason when history-only;
 - each uncertain entry carries `recovery: {state: "uncertain", input}` with the exact saved input; uncertainty is never reported as normal continuability;
+- external session leases are observed through Playbook's shared API [[1]]: an active writer reports liveness, and active or unprovable ownership reports `externalWriter` and withholds recovery controls until ownership is idle;
 - each entry carries a title — the first Boss turn's text — absent when the session held no turn;
 - each entry carries its turn count and whether it ended holding a failure record.
 
@@ -665,6 +666,7 @@ When the integration suite opens recorded Captain/player work after removing its
 When an integration suite interrupts CLI-created and desktop-created sessions and recovers them through core commands, it shall verify explicit recovery [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)]:
 
 - listing and broadcasts expose the saved input and disable ordinary continuation [[core-service-32](#core-service-32)] [[core-service-34](#core-service-34)];
+- an active external writer withholds recovery, and releasing its lease reveals uncertainty without another replay write [[core-service-32](#core-service-32)];
 - Retry reuses saved configuration and input, preserves logical identities and intent dispatch, and refuses unsafe reconciliation;
 - Discard restores the prior checkpoint or removes a fresh attempt without loading agents, and ledger advancement refuses without evidence loss;
 - competing leases and repeated requests start no duplicate turn;

@@ -81,6 +81,7 @@ interface SessionMeta {
   createdAt: number;
   endedAt: number | null;
   live: boolean;
+  externalWriter?: "active" | "unknown";
   players: SessionInfo["players"];
   initialVisible: string[];
   /** Set when an append failed: the file is a complete prefix only up
@@ -131,8 +132,9 @@ function sessionInfo(
     projectId: meta.projectId,
     projectPath: path,
     createdAt: meta.createdAt,
-    live: meta.live,
-    endedAt: meta.endedAt,
+    live: meta.live || meta.externalWriter === "active",
+    endedAt: meta.externalWriter ? null : meta.endedAt,
+    ...(meta.externalWriter ? {externalWriter: meta.externalWriter, turnActive: meta.externalWriter === "active" && !!meta.recovery} : {}),
     players: meta.players,
     initialVisible: meta.initialVisible,
     ...(title !== undefined ? { title } : {}),
@@ -143,9 +145,10 @@ function sessionInfo(
       ? { streamIncompleteAfterSeq: meta.streamIncompleteAfterSeq }
       : {}),
     ...(meta.foreign ? { foreign: true } : {}),
-    ...(!meta.live && meta.continuable ? { continuable: true } : {}),
-    ...(meta.continuationReason ? { continuationReason: meta.continuationReason } : {}),
-    ...(meta.recovery ? { recovery: meta.recovery } : {}),
+    ...(!meta.live && !meta.externalWriter && meta.continuable ? { continuable: true } : {}),
+    ...(meta.externalWriter ? {continuationReason: meta.externalWriter === "active" ? "Session is active in another host" : "Session ownership cannot be verified"}
+      : meta.continuationReason ? { continuationReason: meta.continuationReason } : {}),
+    ...(meta.recovery && !meta.externalWriter ? { recovery: meta.recovery } : {}),
   };
 }
 
@@ -589,11 +592,13 @@ export class Store {
       initialVisible = [...ids];
     }
     const prior = this.sessions.get(id);
+    const writer = live ? "idle" : await shared.readLeaseState(id);
     const meta: SessionMeta = {
       id, projectId: project.id,
       createdAt: Date.parse(manifest.createdAt) || stored.find(({record}) => hasPresentationHeader(record))?.record.timestamp || 0,
       endedAt: live ? null : Date.parse(manifest.updatedAt) || stored.reduce((last, entry) => Math.max(last, Number(entry.record.timestamp) || 0), 0),
       live: live ?? prior?.live ?? false,
+      ...(writer !== "idle" ? {externalWriter: writer} : {}),
       players, initialVisible, originDir: shared.sessionsDir,
       ...(continuable ? { continuable: true } : {}),
       ...(reason ? { continuationReason: reason } : {}),

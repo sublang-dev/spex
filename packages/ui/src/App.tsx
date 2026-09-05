@@ -545,7 +545,7 @@ function WorkspaceSurface({
           // color is never the only channel.
           const name =
             title +
-            (session.live ? "" : " — ended") +
+            (session.externalWriter === "unknown" ? " — ownership unknown" : session.externalWriter ? " — in use elsewhere" : session.live ? "" : " — ended") +
             (attentionItem
               ? attentionItem.kind === "failure"
                 ? " — failed"
@@ -599,7 +599,7 @@ function WorkspaceSurface({
                   />
                 ) : null}
                 <span className="truncate">{title}</span>
-                {session.live ? null : (
+                {session.live || session.externalWriter ? null : (
                   <span
                     data-testid={`tab-ended-${session.id}`}
                     className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
@@ -755,11 +755,11 @@ function WorkspaceSurface({
             playbooks={summary?.playbooks ?? []}
             connected={connection === "open"}
             error={runErrors[activeSession.id]}
-            readOnly={!activeSession.live && !activeSession.continuable}
+            readOnly={!!activeSession.externalWriter || (!activeSession.live && !activeSession.continuable)}
             ending={ending[activeSession.id]}
             readinessHint={readinessHint}
             onEnd={
-              activeSession.live ? () => endSession(activeSession) : undefined
+              activeSession.live && !activeSession.externalWriter ? () => endSession(activeSession) : undefined
             }
             onRecover={(action) => useAppStore.getState().recoverSession(activeSession.id, action)}
             onRetryLoad={() => {

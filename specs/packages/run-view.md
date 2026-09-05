@@ -249,6 +249,10 @@ While a stored session is uncertain, the run view shall show "Interrupted turn" 
 - confirmation focuses Cancel, Escape cancels, and pending or disconnected controls are disabled;
 - success follows the reported state in place; refusal shows its cause with the transcript and draft preserved.
 
+#### run-view-125
+
+While a session reports external ownership [[core-service-32](core-service.md#core-service-32)], the run view shall show its history and ownership reason without session mutation controls, preserving drafts and queued input until ownership is idle.
+
 #### run-view-34
 
 The run view shall keep cross-project attention and playbook creation at hand:
@@ -835,6 +839,10 @@ Where fixture streams hold one intent standing on a pending question, one holdin
 #### run-view-124
 
 When an integration suite reconnects the app store and delivers a history-replacement notification over its protocol boundary, it shall verify reloading from sequence zero with drafts and queued input preserved [[run-view-123](#run-view-123)].
+
+#### run-view-126
+
+When an integration suite presents active and unprovable external ownership, it shall verify visible history, the ownership reason, unavailable mutation controls and preserved drafts and queued input [[run-view-125](#run-view-125)].
 
 #### run-view-19
 

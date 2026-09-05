@@ -44,7 +44,8 @@ Recovery evidence is durable before external actions run, independently of trans
 The checkpoint identifies an exact replay prefix by sequence and digest.
 Its state is `settled`, `uncertain` or `history-only`; transcript completeness alone does not establish safe continuation.
 
-An `uncertain` session requires explicit recovery in desktop or CLI:
+A turn is marked `uncertain` before execution and stays so until settlement.
+If its writer stops first, desktop or CLI requires explicit recovery:
 
 - **Retry** reconciles completed work, then retries the saved input with its saved configuration.
 - **Discard** restores the preceding checkpoint only if the effect ledger has not advanced; a fresh session with no settled checkpoint may be removed.

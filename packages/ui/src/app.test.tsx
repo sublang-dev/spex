@@ -622,6 +622,36 @@ describe("run-view-58, projects-4: the Overview tab pins the project's group", (
 });
 
 describe("DR-038, core-service-70: sessions can be deleted from the sidebar", () => {
+  test.each(["active", "unknown"] as const)("external %s ownership removes open End/Delete confirmations and keeps the transcript", (externalWriter) => {
+    const composer = {draft: "Keep draft", queued: [{text: "Keep queue"}]};
+    useAppStore.setState({composers: {"a-live": composer}});
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", {name: "End session"}));
+    expect(screen.getByRole("button", {name: "End"})).toBeTruthy();
+    fireEvent.click(screen.getByTestId("sidebar-delete-a-failed"));
+    expect(screen.getByTestId("sidebar-delete-confirm-a-failed")).toBeTruthy();
+    act(() => {
+      useAppStore.setState({sessions: SESSIONS.map((entry) =>
+        ["a-live", "a-failed"].includes(entry.id)
+          ? {...entry, externalWriter, live: externalWriter === "active", endedAt: null}
+          : entry)});
+    });
+    expect(screen.getByTestId("session-external-owner")).toBeTruthy();
+    expect(screen.getByTestId("captain-pane")).toBeTruthy();
+    expect(screen.queryByTestId("boss-composer")).toBeNull();
+    expect(screen.queryByTestId("tab-ended-a-live")).toBeNull();
+    expect(screen.queryByRole("button", {name: "End"})).toBeNull();
+    expect(screen.queryByRole("button", {name: "End session"})).toBeNull();
+    expect(screen.queryByTestId("sidebar-delete-confirm-a-failed")).toBeNull();
+    expect(screen.queryByTestId("sidebar-delete-a-failed")).toBeNull();
+    expect(screen.queryByTestId("sidebar-delete-a-live")).toBeNull();
+    expect(screen.getByTestId("sidebar-session-a-live").getAttribute("aria-label"))
+      .toContain(externalWriter === "active" ? "in use elsewhere" : "ownership unknown");
+    expect(useAppStore.getState().composers["a-live"]).toEqual(composer);
+    expect(commandMock).not.toHaveBeenCalledWith("session.dispose", expect.anything());
+    expect(commandMock).not.toHaveBeenCalledWith("session.delete", expect.anything());
+  });
+
   test("an ended session offers delete; the confirm sends session.delete and every trace goes", async () => {
     render(<App />);
     // A live session carries no delete control; an ended one does.

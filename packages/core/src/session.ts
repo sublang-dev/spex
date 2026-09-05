@@ -86,11 +86,11 @@ export class SessionManager {
   listSessions(): SessionInfo[] {
     return this.store.listSessions().map((session) => {
       const live = this.live.get(session.id);
-      return {...session, live: !!live, turnActive: live?.turnActive ?? false};
+      return {...session, live: !!live || session.live, turnActive: live?.turnActive ?? session.turnActive ?? false};
     });
   }
   listLanes(): { sessionId: string; projectId: string; turnActive: boolean }[] {
-    return [...this.live.values()].map(({info,turnActive}) => ({sessionId: info.id, projectId: info.projectId, turnActive}));
+    return this.listSessions().filter((session) => session.live).map((session) => ({sessionId:session.id, projectId:session.projectId, turnActive:session.turnActive ?? false}));
   }
   getLive(sessionId: string): LiveSession | undefined { return this.live.get(sessionId); }
 
@@ -120,7 +120,7 @@ export class SessionManager {
   }
 
   private async open(project: ProjectInfo, composed: ComposedConfig | undefined, sessionId: string, mode: "new" | "continue" | "retry"): Promise<SessionInfo> {
-    if (this.opening.has(project.id) || [...this.live.values()].some((entry) => entry.info.projectId === project.id) || this.recovering.has(sessionId)) {
+    if (this.opening.has(project.id) || this.store.listSessions().some((session) => session.projectId === project.id && (session.live || session.externalWriter)) || this.recovering.has(sessionId)) {
       throw new CoreError("busy", `end the active session in ${project.name} first`);
     }
     this.opening.add(project.id);

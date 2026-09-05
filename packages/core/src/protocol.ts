@@ -164,6 +164,8 @@ export interface SessionInfo {
   live: boolean;
   /** Includes checkpoint settlement after the runtime finishes. */
   turnActive?: boolean;
+  /** Another CLI/host owns this session, or its ownership is unprovable. */
+  externalWriter?: "active" | "unknown";
   endedAt: number | null;
   /** The session's bound player roster, in config order (DR-032). */
   players: { id: string; adapter: AdapterName; model?: string; fastMode?: boolean }[];

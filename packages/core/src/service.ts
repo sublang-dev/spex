@@ -368,7 +368,7 @@ export class CoreService {
       // sidecars are irrelevant, and the store excludes owned sessions
       // when a shared stream changes. A missing filename means scan.
       if (filename && (
-        (!filename.endsWith(".json") && !filename.endsWith(".records.jsonl")) ||
+        (!filename.endsWith(".json") && !filename.endsWith(".records.jsonl") && !/^\.[0-9a-f-]{36}\.lock$/.test(filename)) ||
         filename.endsWith(".spex.json")
       )) {
         return;

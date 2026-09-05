@@ -2094,6 +2094,79 @@ describe("run-view-116/117: a lane folds to a rail and returns for its call", ()
 });
 
 describe("run-view-110: explicit uncertain-turn recovery", () => {
+  test("external ownership keeps delivery history without allowing its actions", () => {
+    const previous = useAppStore.getState();
+    useAppStore.setState({ledger: {...EMPTY_LEDGER, intents: [FINISHED, QUEUED_NEXT]}});
+    try {
+      renderRunWith(TURN_ONE, {session: {...SESSION, externalWriter: "active"}});
+      expect(screen.getByTestId("delivery-card-i1")).toBeTruthy();
+      expect((screen.getByTestId("delivery-confirm") as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByTestId("delivery-drop") as HTMLButtonElement).disabled).toBe(true);
+    } finally {useAppStore.setState(previous, true);}
+  });
+
+  test.each(["active", "unknown"] as const)("external %s ownership hides session controls and keeps streaming history", (externalWriter) => {
+    const session = { ...SESSION, externalWriter, live: externalWriter === "active", turnActive: false,
+      recovery: { state: "uncertain" as const, input: "Saved request" } };
+    const view = applyRecords(initialSessionView(PLAYERS), TURN_ONE);
+    const composer = { draft: "Keep draft", queued: [{text: "Keep queue"}] };
+    const props = {session, view, composer, connected: true, readOnly: false,
+      onSubmit: vi.fn(async () => {}), onRecover: vi.fn(async () => {}), onEnd: vi.fn(),
+      onStartNew: vi.fn(), onAbort: vi.fn(), onRemoveQueued: vi.fn(), onDismissError: vi.fn()};
+    const rendered = render(<RunView {...props} />);
+    expect(screen.getByTestId("session-external-owner").textContent).toContain(externalWriter === "active" ? "in use elsewhere" : "ownership is unknown");
+    expect(screen.queryByTestId("session-ended-at")).toBeNull();
+    expect(screen.queryByTestId("ended-notice")).toBeNull();
+    expect(screen.queryByText("Interrupted turn")).toBeNull();
+    expect(screen.queryByTestId("boss-composer")).toBeNull();
+    for (const name of ["Retry", "Discard", "End session", "New session"]) {
+      expect(screen.queryByRole("button", {name})).toBeNull();
+    }
+    applyRecords(view, [{seq: view.lastSeq + 1, record: {type: "captain_reply", timestamp: 100, turnId: 1, text: "New external output"} as TmuxPlayRecord}]);
+    rendered.rerender(<RunView {...props} view={{...view}} />);
+    expect(screen.getByText("New external output")).toBeTruthy();
+    expect(composer).toEqual({draft: "Keep draft", queued: [{text: "Keep queue"}]});
+  });
+
+  test.each(["active", "unknown"] as const)("external %s ownership blocks queued and direct mutations without losing input", async (externalWriter) => {
+    const previous = useAppStore.getState();
+    const command = vi.fn(async () => ({}));
+    setClientForTests({command} as never);
+    const session = {...SESSION, externalWriter, live: externalWriter === "active", turnActive: false};
+    const composer = {draft: "Keep draft", queued: [{text: "Keep queue"}]};
+    useAppStore.setState({sessions: [session], views: {s1: initialSessionView(PLAYERS)}, composers: {s1: composer}, specTrees: {}, activeSessionId: undefined});
+    try {
+      deliverServerMessageForTests({type: "record", channel: "session", sessionId: "s1", seq: 1,
+        record: {type: "turn_finished", turnId: 1, timestamp: 1} as TmuxPlayRecord});
+      deliverServerMessageForTests({type: "session.state", session});
+      await expect(useAppStore.getState().submitBossText("s1", "New request")).rejects.toThrow("ownership");
+      await expect(useAppStore.getState().recoverSession("s1", "retry")).rejects.toThrow("ownership");
+      await expect(useAppStore.getState().recoverSession("s1", "discard")).rejects.toThrow("ownership");
+      await expect(useAppStore.getState().disposeSession("s1")).rejects.toThrow("ownership");
+      await expect(useAppStore.getState().deleteSession("s1")).rejects.toThrow("ownership");
+      expect(command).not.toHaveBeenCalled();
+      expect(useAppStore.getState().composers.s1).toEqual(composer);
+      expect(useAppStore.getState().views.s1.lastSeq).toBe(1);
+      deliverServerMessageForTests({type: "session.state", session: {...SESSION, live: false}});
+      expect(command).not.toHaveBeenCalled();
+      expect(useAppStore.getState().composers.s1).toEqual(composer);
+    } finally {setClientForTests(undefined); useAppStore.setState(previous, true);}
+  });
+
+  test("confirmed disposal clears input only after the command succeeds", async () => {
+    const previous = useAppStore.getState();
+    const command = vi.fn().mockRejectedValueOnce(new Error("cleanup failed")).mockResolvedValueOnce(null);
+    setClientForTests({command} as never);
+    const composer = {draft: "Keep draft", queued: [{text: "Keep queue"}]};
+    useAppStore.setState({sessions: [SESSION], composers: {s1: composer}});
+    try {
+      await expect(useAppStore.getState().disposeSession("s1")).rejects.toThrow("cleanup failed");
+      expect(useAppStore.getState().composers.s1).toEqual(composer);
+      await useAppStore.getState().disposeSession("s1");
+      expect(useAppStore.getState().composers.s1).toEqual({draft: "", queued: []});
+    } finally {setClientForTests(undefined); useAppStore.setState(previous, true);}
+  });
+
   function renderInterrupted(onRecover: (action: "retry" | "discard") => Promise<void> = vi.fn(async () => {}), connected = true) {
     const session = { ...SESSION, live: false, continuable: false, recovery: { state: "uncertain" as const, input: "Original interrupted request" } };
     const props = {

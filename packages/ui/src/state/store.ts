@@ -368,7 +368,7 @@ export const useAppStore = create<AppState>((set, get) => {
     const next = composer?.queued[0];
     if (!view || view.turnActive || next === undefined) return;
     const session = state.sessions.find((s) => s.id === sessionId);
-    if (session?.turnActive || session?.recovery) return;
+    if (session?.externalWriter || session?.turnActive || session?.recovery) return;
     if (session && !session.live) {
       // Ended or replaced history cannot authorize an automatic send.
       // Keep the queue available for the user's next action.
@@ -970,36 +970,36 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     async disposeSession(sessionId: string): Promise<void> {
-      // The end-session confirm already named what gets discarded.
-      const composer = get().composers[sessionId];
-      if (composer?.draft) {
-        set({
-          composers: {
-            ...get().composers,
-            [sessionId]: { ...composer, draft: "" },
-          },
-        });
+      if (get().sessions.find((session) => session.id === sessionId)?.externalWriter) {
+        throw new Error("Session ownership must be idle before ending it here.");
       }
       try {
         await getClient().command("session.dispose", { sessionId });
       } catch (cause) {
         const error = cause as { code?: string; message: string };
         // Already gone: reflect reality instead of erroring.
-        if (error.code !== "not_found") {
-          setRunError(sessionId, `end session failed: ${error.message}`);
-          throw cause;
-        }
+        if (error.code === "not_found") return;
+        setRunError(sessionId, `end session failed: ${error.message}`);
+        throw cause;
+      }
+      // Only an explicit, confirmed end discards composer input.
+      if (get().composers[sessionId]) {
+        set({composers: {...get().composers, [sessionId]: {draft: "", queued: []}}});
       }
     },
 
     async deleteSession(sessionId: string): Promise<void> {
       const session = get().sessions.find((s) => s.id === sessionId);
+      if (session?.externalWriter) throw new Error("Session ownership must be idle before deleting it.");
       await getClient().command("session.delete", { sessionId });
       // The broadcast follows; the reply is proof enough to forget it.
       if (session) get().forgetSession(sessionId, session.projectId);
     },
 
     async recoverSession(sessionId: string, action: "retry" | "discard"): Promise<void> {
+      if (get().sessions.find((session) => session.id === sessionId)?.externalWriter) {
+        throw new Error("Session ownership must be idle before recovery.");
+      }
       if (action === "retry") {
         await getClient().command("session.retry", { sessionId });
       } else {
@@ -1038,6 +1038,7 @@ export const useAppStore = create<AppState>((set, get) => {
     async submitBossText(sessionId: string, text: string): Promise<void> {
       const state = get();
       const session = state.sessions.find((s) => s.id === sessionId);
+      if (session?.externalWriter) throw new Error("Session ownership must be idle before sending a message.");
       if (session?.recovery && !session.turnActive) {
         throw new Error("Recover the interrupted turn before sending another message.");
       }

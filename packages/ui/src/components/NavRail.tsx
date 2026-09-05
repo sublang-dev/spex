@@ -78,11 +78,12 @@ export interface NavRailProps {
   foot?: ReactNode;
 }
 
-type Life = "question" | "failure" | "running" | "ended-failed" | "ended";
+type Life = "question" | "failure" | "running" | "ended-failed" | "ended" | "external-active" | "external-unknown";
 
 /** Attention first, life second (run-view-73): the row says "answer
  * me" before it says "I am alive". */
 function lifeOf(session: SessionInfo, item: AttentionItem | undefined): Life {
+  if (session.externalWriter) return session.externalWriter === "active" ? "external-active" : "external-unknown";
   if (item?.kind === "question") return "question";
   if (item?.kind === "failure") return "failure";
   if (session.live) return "running";
@@ -95,6 +96,8 @@ const LIFE_WORDS: Record<Life, string> = {
   running: "running",
   "ended-failed": "ended, held a failure",
   ended: "ended",
+  "external-active": "in use elsewhere",
+  "external-unknown": "ownership unknown",
 };
 
 // A live failure summons (filled red); a failure a session ended
@@ -105,6 +108,8 @@ const LIFE_MARKS: Record<Life, string> = {
   running: "bg-emerald-500",
   "ended-failed": "border-2 border-red-500",
   ended: "border-2 border-neutral-500",
+  "external-active": "bg-emerald-500",
+  "external-unknown": "border-2 border-neutral-500",
 };
 
 function sessionLabel(
@@ -165,7 +170,7 @@ export function NavRail(props: NavRailProps) {
     for (const session of sessions) {
       const bucket = map.get(session.projectId);
       if (!bucket) continue;
-      if (session.live) bucket.live.push(session);
+      if (session.live || session.externalWriter) bucket.live.push(session);
       else bucket.ended.push(session);
     }
     for (const bucket of map.values()) {
@@ -500,11 +505,9 @@ export function NavRail(props: NavRailProps) {
                   const item = attention.get(session.id);
                   const life = lifeOf(session, item);
                   const active = session.id === shownSessionId;
-                  // Every non-live session can be deleted (DR-042): a
-                  // session another host wrote goes from the shared
-                  // store, its terminal history with it (core-service-70).
-                  const deletable = !session.live;
-                  const confirming = confirmDelete === session.id;
+                  // External ownership must be known idle before deletion.
+                  const deletable = !session.live && !session.externalWriter;
+                  const confirming = deletable && confirmDelete === session.id;
                   return (
                     <div
                       key={session.id}

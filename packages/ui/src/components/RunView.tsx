@@ -168,6 +168,8 @@ export function RunView({
   focusTurn?: number;
   onFocusHandled?: () => void;
 }) {
+  const externalWriter = session.externalWriter;
+  readOnly ||= !!externalWriter;
   const machineGraphs = useAppStore((state) => state.machineGraphs);
   const captainSplit = useAppStore((state) => state.captainSplit);
   const setCaptainSplit = useAppStore((state) => state.setCaptainSplit);
@@ -306,7 +308,7 @@ export function RunView({
           <DeliveryCard
             derived={entry}
             closed={!stillOpen}
-            live={session.live}
+            live={session.live && !externalWriter}
             next={nextUp}
             onClose={(as) => closeIntent(entry.intent.id, as)}
             onStartNext={(intent) => void stageDispatch(intent)}
@@ -396,8 +398,8 @@ export function RunView({
   // Ended is the session's own state; read-only is the host's verdict
   // on it — a continuable session is ended yet keeps its composer
   // (run-view-33, DR-042).
-  const ended = readOnly || !session.live;
-  const uncertain = !!session.recovery && !session.turnActive;
+  const ended = !externalWriter && (readOnly || !session.live);
+  const uncertain = !externalWriter && !!session.recovery && !session.turnActive;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -407,7 +409,17 @@ export function RunView({
         <span className="min-w-0 truncate font-medium" title={title}>
           {title}
         </span>
-        {ended ? (
+        {externalWriter ? (
+          <span
+            role="status"
+            data-testid="session-external-owner"
+            className="text-xs text-neutral-500 dark:text-neutral-400"
+          >
+            {externalWriter === "active"
+              ? "Session is in use elsewhere"
+              : "Session ownership is unknown · controls are unavailable"}
+          </span>
+        ) : ended ? (
           <span
             data-testid="session-ended-at"
             className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
