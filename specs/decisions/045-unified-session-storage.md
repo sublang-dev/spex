@@ -103,5 +103,6 @@ Define each encoding once in its owning spec package, enforced by shared validat
 
 - Shared recovery replaces sidecar authority, separate restoration and the in-memory substitute ledger.
 - History is portable; exact resumption requires compatible runtimes, with fresh provider conversations as fallback.
+- Where repository or module paths differ, cross-device continuation requires Playbook-defined checkpoint relocation; until supported, the destination sees history only, even with fresh provider conversations.
 - Align Spex, Playbook and Cligent contracts before rollout; Git supplies ancestry and recovery history without a separate sync engine.
 - Record accepted requirements in their owning spec packages; keep the inventory descriptive.
