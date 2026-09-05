@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 SubLang International <https://sublang.ai>
 
-// Disposal-failure coverage (CORE-40/41): one runtime that fails to
-// dispose must not strand its project (CORE-4) nor skip another
-// session's disposal at shutdown (CORE-39) — that would orphan the
-// other session's agent processes.
+// Disposal-failure coverage (CORE-40/41): unproven runtime cleanup
+// keeps project admission closed (DR-048), while shutdown still
+// attempts every runtime and closes the endpoint (CORE-39).
 //
 // The failure is real rather than stubbed: the captain's dispose
 // rejects, and cligent's own runtime disposal surfaces it, so the
@@ -175,8 +174,8 @@ async function startHarness(captains: Captain[]): Promise<Harness> {
   return { service, projectDirs };
 }
 
-test("CORE-40: a failed disposal ends the session and frees its project", async () => {
-  const harness = await startHarness([brokenCaptain(), healthyCaptain().captain]);
+test("CORE-40: a failed disposal keeps the session live and its project reserved", async () => {
+  const harness = await startHarness([brokenCaptain()]);
   const client = new Client(harness.service.port());
   await client.open();
   try {
@@ -197,15 +196,20 @@ test("CORE-40: a failed disposal ends the session and frees its project", async 
       new RegExp(DISPOSE_FAILURE),
     );
 
-    // ...and the project is not stranded: it takes a new session.
-    const replacement = await client.expectOk("session.create", {
+    // Failed teardown cannot prove external work stopped, so admission stays closed.
+    const sessions = await client.expectOk("session.list", {});
+    const retained = sessions.find((entry) => entry.id === session.id);
+    assert.equal(retained?.live, true);
+    assert.equal(retained?.endedAt, null);
+    const replacement = await client.command("session.create", {
       projectId: project.id,
     });
-    assert.notEqual(replacement.id, session.id);
+    assert.equal(replacement.ok, false);
+    assert.equal(replacement.ok === false ? replacement.error.code : "", "busy");
   } finally {
     client.close();
     await harness.service.stop().catch(() => {
-      // The replacement session's disposal is not under test here.
+      // The same broken runtime still rejects teardown at shutdown.
     });
   }
 });

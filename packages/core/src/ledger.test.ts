@@ -21,7 +21,7 @@ import { CoreService } from "./service.js";
 import { parseSpecTree } from "./specs.js";
 import { fakeAdapterImports } from "./testing/fake-adapter.js";
 import { createScriptedCaptain } from "./testing/scripted-captain.js";
-import { ARTIFACT_SCHEMAS } from "./config.js";
+import { demoHistoryIntentId, seedHistorySession } from "./testing/demo.js";
 import type {
   Command,
   CommandResults,
@@ -564,101 +564,107 @@ test("DR-035: an un-ledgered finished turn stands in for review until the viewed
 // the same states, with no live lane surviving the restart.
 // ---------------------------------------------------------------------------
 
-test("DR-035: reopening the store reproduces closed, queued, and finished; a dead session's dispatch releases", () => {
+test("DR-035: reopening the store reproduces closed, queued, and finished; a dead session's dispatch releases", async () => {
+  const ids = { s1: "73000000-0000-4000-8000-000000000001", s2: "73000000-0000-4000-8000-000000000002", closed: "73000000-0000-4000-8000-000000000003", queued: "73000000-0000-4000-8000-000000000004", finished: "73000000-0000-4000-8000-000000000005", working: "73000000-0000-4000-8000-000000000006" };
   const dir = mkdtempSync(join(tmpdir(), "spex-ledger-"));
   const path = join(dir, "state");
   const { store, projectId } = newProjectStore(path);
-  addSession(store, projectId, "s1");
-  addSession(store, projectId, "s2");
+  addSession(store, projectId, ids.s1);
+  addSession(store, projectId, ids.s2);
 
-  queueIntent(store, projectId, "closed", "3");
-  store.closeIntent("closed", "dropped", 500);
-  queueIntent(store, projectId, "queued", "5");
-  queueIntent(store, projectId, "finished", "i");
-  beginTurn(store, "s1", 1, "deliver", 1000);
-  store.stampIntentDispatch("finished", "s1", 1, 1000);
-  finishTurn(store, "s1", 1, 2000);
-  queueIntent(store, projectId, "working", "r");
-  beginTurn(store, "s2", 1, "mid-flight", 3000);
-  store.stampIntentDispatch("working", "s2", 1, 3000);
+  queueIntent(store, projectId, ids.closed, "3");
+  store.closeIntent(ids.closed, "dropped", 500);
+  queueIntent(store, projectId, ids.queued, "5");
+  queueIntent(store, projectId, ids.finished, "i");
+  beginTurn(store, ids.s1, 1, "deliver", 1000);
+  store.stampIntentDispatch(ids.finished, ids.s1, 1, 1000);
+  finishTurn(store, ids.s1, 1, 2000);
+  queueIntent(store, projectId, ids.working, "r");
+  beginTurn(store, ids.s2, 1, "mid-flight", 3000);
+  store.stampIntentDispatch(ids.working, ids.s2, 1, 3000);
 
-  const before = fold(store, [lane("s1", projectId, false), lane("s2", projectId, true)]);
-  assert.equal(stateOf(before, "queued").state, "queued");
-  assert.equal(stateOf(before, "finished").state, "finished");
-  assert.equal(stateOf(before, "working").state, "working");
+  const before = fold(store, [lane(ids.s1, projectId, false), lane(ids.s2, projectId, true)]);
+  assert.equal(stateOf(before, ids.queued).state, "queued");
+  assert.equal(stateOf(before, ids.finished).state, "finished");
+  assert.equal(stateOf(before, ids.working).state, "working");
   assert.ok(
-    !before.intents.some((entry) => entry.intent.id === "closed"),
+    !before.intents.some((entry) => entry.intent.id === ids.closed),
     "a closed intent never re-enters the open fold",
   );
+  await seedHistorySession(join(path, "sessions"), "/tmp/ledger-proj", store.getRecords(ids.s1, { includeHidden: true }).map((entry) => entry.record as unknown as Record<string, unknown>), ids.s1);
+  await seedHistorySession(join(path, "sessions"), "/tmp/ledger-proj", store.getRecords(ids.s2, { includeHidden: true }).map((entry) => entry.record as unknown as Record<string, unknown>), ids.s2);
   store.close();
 
   // Restart: same file, no live lanes.
   const reopened = new Store({ dir: path });
+  await reopened.initializeSessions();
   const after = fold(reopened, []);
-  const queued = stateOf(after, "queued");
+  const queued = stateOf(after, ids.queued);
   assert.equal(queued.state, "queued");
   assert.equal(queued.intent.rank, "5");
   // Finished persists: it derives from ended turns, not from a lane.
   assert.deepEqual(
-    stateOf(after, "finished"),
-    stateOf(before, "finished"),
+    stateOf(after, ids.finished),
+    stateOf(before, ids.finished),
     "the finished derivation is restart-identical",
   );
   assert.deepEqual(after.attention, before.attention);
   // The mid-turn dispatch releases: its session died before the turn
   // finished. Stamps and rank stay.
-  const released = stateOf(after, "working");
+  const released = stateOf(after, ids.working);
   assert.equal(released.state, "queued");
   assert.equal(released.intent.rank, "r");
   assert.ok(released.intent.dispatched);
   // The closed row is kept, never deleted.
-  assert.equal(reopened.getIntent("closed")?.closedAs, "dropped");
+  assert.equal(reopened.getIntent(ids.closed)?.closedAs, "dropped");
   reopened.close();
 });
 
-test("core-service-79: a remove act retires a closed intent from every read, its acts kept and its neighbours unmoved", () => {
+test("core-service-79: a remove act retires a closed intent from every read, its acts kept and its neighbours unmoved", async () => {
+  const ids = { s1: "73000000-0000-4000-8000-000000000001", gone: "73000000-0000-4000-8000-000000000002", kept: "73000000-0000-4000-8000-000000000003" };
   const dir = mkdtempSync(join(tmpdir(), "spex-ledger-remove-"));
   const path = join(dir, "state");
   const { store, projectId } = newProjectStore(path);
-  addSession(store, projectId, "s1");
+  addSession(store, projectId, ids.s1);
 
   // One worked, confirmed intent, a plain chat turn ruled by its
   // verdict, and a queued bystander.
-  queueIntent(store, projectId, "gone", "3", {
+  queueIntent(store, projectId, ids.gone, "3", {
     source: { kind: "issue", ref: "9" },
   });
-  beginTurn(store, "s1", 1, "hello hello hello", 1000);
-  store.stampIntentDispatch("gone", "s1", 1, 1000);
-  finishTurn(store, "s1", 1, 2000);
-  beginTurn(store, "s1", 2, "and a word after", 2200);
-  finishTurn(store, "s1", 2, 2300);
-  store.closeIntent("gone", "done", 2500);
-  queueIntent(store, projectId, "kept", "5");
+  beginTurn(store, ids.s1, 1, "hello hello hello", 1000);
+  store.stampIntentDispatch(ids.gone, ids.s1, 1, 1000);
+  finishTurn(store, ids.s1, 1, 2000);
+  beginTurn(store, ids.s1, 2, "and a word after", 2200);
+  finishTurn(store, ids.s1, 2, 2300);
+  store.closeIntent(ids.gone, "done", 2500);
+  queueIntent(store, projectId, ids.kept, "5");
 
-  const lanes = [lane("s1", projectId, false)];
+  const lanes = [lane(ids.s1, projectId, false)];
   const before = fold(store, lanes);
   assert.deepEqual(
     store.listClosedIntents(projectId, 20).map((intent) => intent.id),
-    ["gone"],
+    [ids.gone],
   );
   assert.deepEqual(before.attention, [], "the chat turn is ruled, so it waits on nobody");
 
-  store.removeIntent("gone", 5000);
+  store.removeIntent(ids.gone, 5000);
 
   // Absent from every read: the History page, the source binding, and
   // the fold's own rows.
-  assert.equal(store.getIntent("gone"), undefined);
+  assert.equal(store.getIntent(ids.gone), undefined);
   assert.deepEqual(store.listClosedIntents(projectId, 20), []);
   assert.equal(store.openIntentBySource(projectId, "issue", "9"), undefined);
   const after = fold(store, lanes);
   assert.ok(
-    !after.intents.some((entry) => entry.intent.id === "gone"),
+    !after.intents.some((entry) => entry.intent.id === ids.gone),
     "a removed intent lists in no band",
   );
   // Nothing else moves: the removed dispatch still bounds its
   // neighbours' turn ranges, so the ruled chat turn never re-summons.
   assert.deepEqual(after.attention, before.attention);
-  assert.equal(stateOf(after, "kept").state, "queued");
+  assert.equal(stateOf(after, ids.kept).state, "queued");
+  await seedHistorySession(join(path, "sessions"), "/tmp/ledger-proj", store.getRecords(ids.s1, { includeHidden: true }).map((entry) => entry.record as unknown as Record<string, unknown>), ids.s1);
   store.close();
 
   // Restart: the act log still holds every act of the removed intent,
@@ -668,13 +674,14 @@ test("core-service-79: a remove act retires a closed intent from every read, its
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as { act: string; id?: string })
-    .filter((act) => act.id === "gone" || act.act === "queue")
+    .filter((act) => act.id === ids.gone || act.act === "queue")
     .map((act) => act.act);
   assert.deepEqual(acts, ["queue", "dispatch", "close", "queue", "remove"]);
   const reopened = new Store({ dir: path });
-  assert.equal(reopened.getIntent("gone"), undefined);
+  await reopened.initializeSessions();
+  assert.equal(reopened.getIntent(ids.gone), undefined);
   assert.deepEqual(reopened.listClosedIntents(projectId, 20), []);
-  assert.equal(stateOf(fold(reopened, []), "kept").state, "queued");
+  assert.equal(stateOf(fold(reopened, []), ids.kept).state, "queued");
   reopened.close();
 });
 
@@ -838,23 +845,6 @@ interface Harness {
   projectDir: string;
 }
 
-/** A registry entry shaped like the captain shell's load contract, so
- * the harness never depends on the installed @sublang/playbook build
- * (core-service-18: no network, nothing real). */
-const FAKE_REGISTRY_MODULE = {
-  default: {
-    id: "code",
-    command: "code",
-    intent: "scripted coverage playbook",
-    artifactSchema: ARTIFACT_SCHEMAS[0],
-    requiredRoleIds: ["coder"],
-    validateOptions: (captainOptions: unknown) => captainOptions,
-    createRuntime: () => {
-      throw new Error("the scripted captain never builds the real runtime");
-    },
-  },
-};
-
 async function startHarness(options: { dataDir?: string } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "spex-ledger-it-"));
   const configPath = join(dir, "playbook.config.yaml");
@@ -887,10 +877,6 @@ async function startHarness(options: { dataDir?: string } = {}): Promise<Harness
     adapterImports: imports,
     adapterRuntime: () => ({ usable: true }),
     captainFactory: async () => captain,
-    loadModule: async (specifier) =>
-      specifier === "@sublang/playbook/code/registry"
-        ? FAKE_REGISTRY_MODULE
-        : import(specifier),
     env: {},
     home: join(dir, "home"),
     watchConfig: false,
@@ -1191,6 +1177,9 @@ test("core-service-57: submission validates the intent, the turn start stamps it
   assert.equal(bystander?.state, "queued");
   assert.equal(bystander?.intent.dispatched, undefined);
 
+  // The shared checkpoint must settle before another turn starts.
+  await client.waitFor((message) => message.type === "session.state" && message.session.id === session.id && message.session.turns === 1 && message.session.turnActive === false);
+
   // The verdict lands, releasing the follower for dispatch.
   await client.expectOk("intent.close", { intentId: i1.id, as: "done" });
   ledger = await client.expectOk("ledger.get", {});
@@ -1228,6 +1217,10 @@ test("core-service-57: submission validates the intent, the turn start stamps it
     intentId: i2.id,
     text: "Follow the build, retried",
   });
+
+  // An abort leaves shared uncertainty. Resolve it before sending different work.
+  await client.waitFor((message) => message.type === "session.state" && message.session.id === session.id && !message.session.live && !!message.session.recovery);
+  await client.expectOk("session.discard", { sessionId: session.id });
 
   // History is done work (core-service-50, DR-038): the done intent
   // lists; the bystander, worked then dropped, lists under its
@@ -1315,9 +1308,9 @@ test("core-service-58: ledger.history pages 45 closed intents 20/20/5, newest fi
   const project = seeded.registerProject("/tmp/ledger-hist-proj", "hist", 1);
   // Half close done, half were worked — one finished turn each — then
   // dropped: both are history (DR-038).
-  addSession(seeded, project.id, "hist-session");
+  addSession(seeded, project.id, "73000000-0000-4000-8000-000000000010");
   for (let i = 1; i <= 45; i += 1) {
-    const id = `closed-${String(i).padStart(2, "0")}`;
+    const id = demoHistoryIntentId(i);
     seeded.addIntent({
       id,
       projectId: project.id,
@@ -1326,12 +1319,13 @@ test("core-service-58: ledger.history pages 45 closed intents 20/20/5, newest fi
       createdAt: i,
     });
     if (i % 2 === 1) {
-      beginTurn(seeded, "hist-session", i, `Closed intent ${i}`, 100 + i);
-      finishTurn(seeded, "hist-session", i, 500 + i);
-      seeded.stampIntentDispatch(id, "hist-session", i, 100 + i);
+      beginTurn(seeded, "73000000-0000-4000-8000-000000000010", i, `Closed intent ${i}`, 100 + i);
+      finishTurn(seeded, "73000000-0000-4000-8000-000000000010", i, 500 + i);
+      seeded.stampIntentDispatch(id, "73000000-0000-4000-8000-000000000010", i, 100 + i);
     }
     seeded.closeIntent(id, i % 2 === 0 ? "done" : "dropped", 1000 + i);
   }
+  await seedHistorySession(join(dataDir, "sessions"), project.path, seeded.getRecords("73000000-0000-4000-8000-000000000010", { includeHidden: true }).map((entry) => entry.record as unknown as Record<string, unknown>), "73000000-0000-4000-8000-000000000010");
   seeded.close();
 
   const harness = await startHarness({ dataDir });
@@ -1340,7 +1334,7 @@ test("core-service-58: ledger.history pages 45 closed intents 20/20/5, newest fi
 
   const expectedIds = Array.from({ length: 45 }, (_, index) => {
     const n = 45 - index;
-    return `closed-${String(n).padStart(2, "0")}`;
+    return demoHistoryIntentId(n);
   });
 
   const page1 = await client.expectOk("ledger.history", {
