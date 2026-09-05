@@ -101,7 +101,7 @@ jobs:
 
           ## Run from source
 
-          This release ships no binaries: build it locally with Node.js 20 or later (22 recommended) and a native build toolchain.
+          This release ships no binaries: build it on macOS or Linux with Node.js 20 or later (22 recommended) and a native build toolchain. Storage requires private POSIX permissions. Windows users can run the scaffold CLI or access a Spex server in their browser.
 
           \`\`\`bash
           git clone https://github.com/${GITHUB_REPOSITORY}.git

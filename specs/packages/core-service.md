@@ -13,6 +13,12 @@ Every behavior in this package is observable over the WebSocket protocol; the se
 
 ### Endpoint
 
+#### core-service-89
+
+When started on a native platform other than macOS or Linux, the core service shall refuse before creating or migrating config or storage, naming the supported hosts and Windows' scaffold CLI and browser alternatives ([DR-049](../decisions/049-supported-app-hosts.md)):
+
+- Supported hosts require a filesystem that enforces the shared store's private permissions [[1]].
+
 #### core-service-1
 
 Where the core service is started by a host shell, when startup completes, the core service shall accept WebSocket connections on its endpoint — a loopback-only socket the service binds itself by default, or a shell-supplied HTTP server the service attaches to, leaving binding and transport security to that shell ([DR-033](../decisions/033-remote-gui-serving.md)) — and report the endpoint address to the host:
@@ -641,6 +647,10 @@ Where the core service runs with an injected compile spawner whose toolchain run
 - after cancellation, a new `compile.run` for the same id is accepted.
 
 ### Endpoint Coverage
+
+#### core-service-90
+
+Where CI runs on Windows, the integration suite shall invoke core startup in a native Node process and assert the platform refusal leaves its absent config and data paths uncreated [[core-service-89](#core-service-89)].
 
 #### core-service-38
 

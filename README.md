@@ -76,7 +76,10 @@ implement an intent under review, or compile your own workflow from prose
 with [`slc`](https://github.com/sublang-ai/slc).
 
 **3. Work in the Spex IDE**, where specs, playbook runs and compilation, and
-the intent Dashboard live together. Run it from source:
+the intent Dashboard live together. Desktop and server hosts require macOS
+or Linux and a filesystem that enforces private POSIX permissions. Windows
+supports the scaffold CLI and browser access to a Spex server.
+Run the app from source:
 
 ```sh
 git clone https://github.com/sublang-ai/spex.git

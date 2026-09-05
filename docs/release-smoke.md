@@ -9,6 +9,10 @@ automation cannot — real agents, packaging, and look-and-feel. A CLI
 release runs `npm run smoke` (release-20) and the live migration
 smoke (release-24), not this checklist.
 
+App hosts require macOS or Linux with private POSIX storage. CI runs the
+complete suite on both. Windows CI builds every workspace and tests the
+scaffold CLI, browser UI, and refusal of native app startup (DR-049).
+
 ## 1. Automated suite (hermetic — the tagging gate)
 
 ```bash

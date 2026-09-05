@@ -43,8 +43,21 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      - name: Tests
+      - name: Complete app and scaffold tests
+        if: runner.os != 'Windows'
         run: npm test
+
+      - name: Windows scaffold tests
+        if: runner.os == 'Windows'
+        run: npm test -w packages/cli
+
+      - name: Windows UI tests
+        if: runner.os == 'Windows'
+        run: npm test -w packages/ui
+
+      - name: Windows native host refusal
+        if: runner.os == 'Windows'
+        run: node --test packages/core/dist/platform.integration.test.js
 
   # The browser journeys (DR-039): the served UI driven in Chromium
   # against a real core with substitute agents — one lane, one OS.

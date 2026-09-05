@@ -14,7 +14,7 @@ It is a single-user deployment of the same core and UI the desktop app embeds ([
 
 #### server-shell-1
 
-When the server shell starts, it shall boot one core service attached to the shell's own HTTP server — so the shell's port carries both the UI pages and the core's WebSocket endpoint [[core-service-1](core-service.md#core-service-1)] — and print one access URL naming the scheme, bound host, port, and handshake token [[core-service-24](core-service.md#core-service-24)]:
+Where the host platform is supported [[core-service-89](core-service.md#core-service-89)], when the server shell starts, it shall boot one core service attached to the shell's own HTTP server — so the shell's port carries both the UI pages and the core's WebSocket endpoint [[core-service-1](core-service.md#core-service-1)] — and print one access URL naming the scheme, bound host, port, and handshake token [[core-service-24](core-service.md#core-service-24)]:
 
 | Option | Default |
 | --- | --- |

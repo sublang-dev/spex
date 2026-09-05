@@ -268,6 +268,9 @@ export class CoreService {
   }
 
   static async start(options: CoreServiceOptions = {}): Promise<CoreService> {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      throw new Error("Spex desktop and server require macOS or Linux with private POSIX file permissions. On Windows, use the scaffold CLI or connect to a Spex server in your browser.");
+    }
     const service = new CoreService(options);
     try {
     service.store.markAllSessionsNotLive();
