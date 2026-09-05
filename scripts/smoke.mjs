@@ -116,8 +116,8 @@ async function coreRoundTrip() {
 try {
   run("build", "npm", ["run", "build"]);
   run("lint", "node", ["packages/cli/dist/cli.js", "lint"]);
-  run("unit", "npm", ["test"]);
-  run("integration", "npm", ["run", "test:integration", "-w", "packages/core"]);
+  // Workspace test suites already include their integration coverage.
+  run("unit-and-integration", "npm", ["test"]);
   // The browser journeys (DR-039): the served UI in Chromium against
   // a real core with substitute agents. The browser install is a
   // cached no-op after the first run.

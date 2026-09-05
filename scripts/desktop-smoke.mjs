@@ -123,10 +123,12 @@ try {
   const socket = new WebSocket(wsUrl);
   const replies = new Map();
   const records = [];
+  const sessions = new Map();
   let seq = 0;
   socket.on("message", (data) => {
     const message = JSON.parse(String(data));
     if (message.type === "reply") replies.get(message.id)?.(message);
+    if (message.type === "session.state") sessions.set(message.session.id, message.session);
     if (message.type === "record") {
       records.push(message);
       const type = String(message.record?.type ?? "?");
@@ -234,7 +236,24 @@ try {
     60_000,
     "the aborted-turn record",
   );
-  await command("session.dispose", { sessionId: session.id });
+  // The abort record precedes cleanup, which may end the session.
+  const stopped = await waitFor(
+    () => {
+      const state = sessions.get(session.id);
+      return state && !state.turnActive ? state : undefined;
+    },
+    60_000,
+    "turn cleanup after abort",
+  );
+  if (stopped.live) await command("session.dispose", { sessionId: session.id });
+  await waitFor(
+    () => {
+      const state = sessions.get(session.id);
+      return state && !state.live && !state.turnActive;
+    },
+    60_000,
+    "the ended session",
+  );
 
   at("teardown");
   socket.close();

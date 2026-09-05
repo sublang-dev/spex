@@ -15,16 +15,16 @@ smoke (release-24), not this checklist.
 npm run smoke -- --desktop
 ```
 
-Stages: build → spec lint → unit tests → core integration tests →
+Stages: build → spec lint → unit and integration tests (one pass) →
 browser journeys (the served UI in Chromium against a real core with
 substitute agents: first run, palette, Specs, a session, the ledger,
 Settings, Playbooks, the token URL, an unreachable core, keyboard,
 accessibility in both themes, config repair) → core round-trip
 (template composes with `/code`, `/review`, and `/decide` as inline
 agent blocks, builtin catalog and artifacts served, Academy example
-seeds and its tree parses) → Electron render with screenshot
-(`--desktop` flips the native ABI to Electron and restores it, on
-every exit path).
+seeds and its tree parses) → packed CLI user journeys → Electron
+render with screenshot (`--desktop` flips the native ABI to Electron
+and restores it on every exit path).
 Omit `--desktop` for a quick mid-development pass.
 No provider or sign-in is involved, and the render boots on a scratch
 state root, so a running Spex desktop does not block it; a failure
@@ -40,8 +40,8 @@ Boots the real desktop app against a scratch home and walks the
 critical path over the app's own socket: seeded config valid →
 Academy seeds and parses → session starts → a minimal `/code` turn
 dispatches → the coder's live output is observed (real agents) →
-abort → clean teardown, with the ABI flipped and restored by the
-driver (release-22).
+abort → ended session → clean teardown, with the ABI flipped and
+restored by the driver (release-22).
 Needs a locally signed-in Claude adapter; budget ~5–8 minutes.
 Provider-side flakes may be retried or waived with the reason
 recorded beside the tag; app-side failures block.
