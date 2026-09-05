@@ -3,12 +3,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { composeConfig, templatePath } from "./config.js";
-import { ARTIFACT_SCHEMAS } from "./config.js";
 import { readFileSync } from "node:fs";
 import { parse as parseYaml } from "yaml";
 import { SessionManager, CoreError, type RecordEnvelope } from "./session.js";
@@ -27,21 +27,6 @@ function templateRoster(): string[] {
   return Object.keys(top.players);
 }
 
-function registryEntry() {
-  return {
-    id: "code",
-    command: "code",
-    intent: "coding",
-    artifactSchema: ARTIFACT_SCHEMAS[0],
-    requiredRoleIds: ["coder", "reviewer"],
-    idleStateId: "ready",
-    finalStateId: "done",
-    parkStateIds: ["failed", "awaitBossReply"],
-    validateOptions: () => ({}),
-    createRuntime: () => ({}),
-  };
-}
-
 async function setup(
   records: RecordEnvelope[],
   overrides?: {
@@ -50,25 +35,11 @@ async function setup(
   },
 ) {
   const top = parseYaml(readFileSync(templatePath(), "utf8"));
-  const composed = await composeConfig(top, async (specifier) => {
-    const forId = (id: string, roles: string[]) => ({
-      ...registryEntry(),
-      id,
-      command: id,
-      requiredRoleIds: roles,
-    });
-    if (specifier.includes("review")) {
-      return { default: forId("review", ["coder", "reviewer"]) };
-    }
-    if (specifier.includes("decide")) {
-      return { default: forId("decide", ["coder", "reviewer"]) };
-    }
-    if (specifier.includes("/dev/")) {
-      return { default: forId("dev", ["analyst"]) };
-    }
-    return { default: forId("code", ["coder"]) };
-  });
-  const store = new Store({ dir: mkdtempSync(join(tmpdir(), "spex-sess-")) });
+  const composed = await composeConfig(top);
+  const scratch = mkdtempSync(join(tmpdir(), "spex-sess-"));
+  const projectDir = join(scratch, "project"); mkdirSync(projectDir);
+  execFileSync("git", ["init", "-q", projectDir]);
+  const store = new Store({ dir: join(scratch, "state") });
   const { imports, stats } = fakeAdapterImports({
     rules: overrides?.rules ?? [
       {
@@ -86,6 +57,7 @@ async function setup(
       topic: "playbook.fsm.state",
       payload: { to: "ready" },
     });
+    await context.emitReply("work done");
   }));
   const manager = new SessionManager({
     store,
@@ -93,7 +65,7 @@ async function setup(
     captainFactory: async () => captain,
   });
   manager.onRecord = (envelope) => records.push(envelope);
-  const project = store.registerProject("/tmp/proj-a", "proj-a", 1);
+  const project = store.registerProject(projectDir, "proj-a", 1);
   return { manager, store, project, composed, stats };
 }
 
@@ -120,7 +92,7 @@ test("end-to-end turn produces ordered persisted records with visibility flags",
   await waitFor(() => records.some((r) => r.record.type === "turn_finished"));
 
   const types = records.map((r) => r.record.type);
-  assert.equal(types[0], "turn_started");
+  assert.ok(types.indexOf("turn_started") < types.indexOf("captain_status"));
   assert.ok(types.includes("captain_status"));
   assert.ok(types.includes("captain_prompt"));
   assert.ok(types.includes("player_prompt"));
@@ -139,7 +111,8 @@ test("end-to-end turn produces ordered persisted records with visibility flags",
 
   const storedVisible = store.getRecords(info.id);
   const storedAll = store.getRecords(info.id, { includeHidden: true });
-  assert.equal(storedAll.length, records.length);
+  assert.ok(storedAll.some((entry) => (entry.record as { type?: unknown }).type === "session_context"));
+  assert.equal(storedAll.filter((entry) => (entry.record as { type?: unknown }).type !== "session_context").length, records.length);
   assert.ok(storedVisible.length < storedAll.length);
 
   const usage = store.sessionUsage(info.id);
@@ -149,12 +122,14 @@ test("end-to-end turn produces ordered persisted records with visibility flags",
   assert.ok(stats.constructed >= 2, "captain and player fakes constructed");
   assert.ok(stats.runs.some((run) => run.prompt.includes("route:")));
 
-  const second = store.registerProject("/tmp/proj-b", "proj-b", 2);
+  const secondDir = join(project.path, "..", "second"); mkdirSync(secondDir);
+  execFileSync("git", ["init", "-q", secondDir]);
+  const second = store.registerProject(secondDir, "proj-b", 2);
   const other = await manager.createSession(second, composed);
   assert.notEqual(other.id, info.id);
   await assert.rejects(
     manager.createSession(project, composed),
-    (error: CoreError) => error.code === "conflict",
+    (error: CoreError) => error.code === "busy",
   );
 
   await manager.disposeAll();
@@ -270,9 +245,11 @@ test("DR-032: a shared lane's records carry the role each call served", async ()
     session.emitTelemetry({
       topic: "playbook.trace",
       payload: {
-        schemaVersion: 3,
+        schemaVersion: 4,
+        sessionId: "role-fixture", rootSessionId: "role-fixture", playbookId: "code",
+        depth: 1, sequence: 1, timestamp: 1, turnId: 1, callId: roleId,
         type,
-        payload: { roleId, playerId: "dev.coder" },
+        payload: { roleId, playerId: "dev.coder", resume: false, ...(type === "player.call.started" ? { prompt: "work" } : { status: "ok" }) },
       },
     });
   const { manager, store, project, composed } = await setup(records, {
@@ -283,6 +260,7 @@ test("DR-032: a shared lane's records carry the role each call served", async ()
       await trace(session, "player.call.started", "reviewer");
       await context.callPlayer("dev.coder", `review: ${turn.prompt}`);
       await trace(session, "player.call.finished", "reviewer");
+      await context.emitReply("review complete");
     },
   });
 
@@ -317,4 +295,6 @@ test("DR-032: a shared lane's records carry the role each call served", async ()
     records.find((r) => r.record.type === "captain_telemetry")?.role,
     undefined,
   );
+  await manager.disposeAll();
+  store.close();
 });

@@ -7,13 +7,15 @@
 // machine's states with a nested review, two player transcripts with
 // tool use, usage, and a clean finish — with no credentials.
 
-import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { createSessionStore, validateSessionManifest } from "@sublang/playbook/session-store";
+import { sha256, writeApplicationFile } from "../app-storage.js";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import type { Captain } from "@sublang/cligent/tmux-play";
 
 import { academyCorpusDir } from "../forge.js";
-import type { TmuxPlayRecord } from "../protocol.js";
 import { Store } from "../store.js";
 import { fakeAdapterImports } from "./fake-adapter.js";
 import { createScriptedCaptain } from "./scripted-captain.js";
@@ -75,61 +77,73 @@ export function seedDemoProject(projectDir: string): void {
  * the core will serve — a History longer than one intent page with
  * nothing run. The project registers by its path, so the core's own
  * registration after boot finds this one. */
-export function seedDemoHistory(
+export async function seedDemoHistory(
   dataDir: string,
   projectDir: string,
   count: number,
-): void {
+): Promise<void> {
   const store = new Store({ dir: dataDir });
   try {
     const project = store.registerProject(projectDir, "demo-project", 1);
-    const sessionId = "history-seed";
+    const sessionId = randomUUID();
     const minute = 60_000;
     const base = Date.now() - (count + 1) * minute;
-    store.createSession({
-      id: sessionId,
-      projectId: project.id,
-      projectPath: projectDir,
-      createdAt: base,
-      live: false,
-      endedAt: base + count * minute,
-      players: [{ id: "dev.coder", adapter: "claude" }],
-      initialVisible: ["dev.coder"],
-      turns: 0,
-      failed: false,
-    });
-    const append = (record: Record<string, unknown>) =>
-      store.appendRecord(
-        sessionId,
-        store.maxSeq(sessionId) + 1,
-        record as unknown as TmuxPlayRecord,
-      );
+    const records: Record<string, unknown>[] = [];
     for (let i = 1; i <= count; i += 1) {
-      const id = `seeded-${String(i).padStart(3, "0")}`;
+      const id = demoHistoryIntentId(i);
       const text = `Seeded done work ${i}`;
       const at = base + i * minute;
-      store.addIntent({
-        id,
-        projectId: project.id,
-        text,
-        rank: `${String(i).padStart(3, "0")}i`,
-        createdAt: at - 30_000,
-      });
-      store.startTurn(sessionId, i, text, at - 20_000);
-      append({
-        type: "turn_started",
-        turnId: i,
-        turn: { id: i, prompt: text },
-        timestamp: at - 20_000,
-      });
-      store.endTurn(sessionId, i, "finished", at - 10_000);
-      append({ type: "turn_finished", turnId: i, timestamp: at - 10_000 });
+      store.addIntent({ id, projectId: project.id, text, rank: `${String(i).padStart(3, "0")}i`, createdAt: at - 30_000 });
+      records.push({ type: "turn_started", turnId: i, turn: { id: i, prompt: text }, timestamp: at - 20_000 });
+      records.push({ type: "turn_finished", turnId: i, timestamp: at - 10_000 });
       store.stampIntentDispatch(id, sessionId, i, at - 20_000);
       store.closeIntent(id, "done", at);
     }
-  } finally {
-    store.close();
-  }
+    await seedHistorySession(join(dataDir, "sessions"), projectDir, records, sessionId);
+  } finally { store.close(); }
+}
+
+export const demoHistoryIntentId = (index: number): string =>
+  `72000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+
+/** Historical fixtures have no runtime checkpoint and never claim to resume. */
+export async function seedHistorySession(
+  sessionsDir: string,
+  cwd: string,
+  records: Record<string, unknown>[],
+  sessionId: string = randomUUID(),
+): Promise<string> {
+  const shared = createSessionStore({ sessionsDir }); await shared.prepare();
+  const writer = await shared.acquire(sessionId);
+  try { for (const record of records) await writer.append(record); }
+  finally { await writer.release(); }
+  const history = await shared.readHistory(sessionId);
+  const bytes = readFileSync(join(sessionsDir, `${sessionId}.records.jsonl`));
+  const times = records.map((record) => record.timestamp).filter((at): at is number => typeof at === "number" && Number.isFinite(at));
+  const lease = await shared.acquireManagement(sessionId);
+  try {
+    const manifest = validateSessionManifest({
+      schemaVersion: 7, kind: "captain-session", sessionId, cwd,
+      createdAt: new Date(times[0] ?? 0).toISOString(), updatedAt: new Date(times.at(-1) ?? 0).toISOString(),
+      state: "history-only", reason: "Historical demonstration fixture", contextSeq: null,
+      replay: { seq: history.lastReadableSeq, sha256: sha256(bytes), incomplete: false },
+    });
+    writeApplicationFile(join(sessionsDir, `${sessionId}.json`), manifest);
+  } finally { await lease.release(); }
+  const checked = await shared.validate(sessionId);
+  if (!checked.integrityValid) throw new Error(checked.reasons.join("; "));
+  return sessionId;
+}
+
+/** Save the real pre-turn uncertainty boundary; the harness stops its host first. */
+export async function interruptDemoSession(sessionsDir: string, sessionId: string, input: string): Promise<void> {
+  const shared = createSessionStore({ sessionsDir });
+  const lease = await shared.acquire(sessionId);
+  try {
+    const prior = await lease.read();
+    if (!prior || prior.state !== "settled") throw new Error("fixture needs a settled real checkpoint");
+    await lease.beginTurn({ input, attemptId: randomUUID(), attemptedExecutionProjection: prior.lastAppliedExecutionProjection });
+  } finally { await lease.release(); }
 }
 
 /** Fake player adapters: the coder edits and tests, the reviewer
@@ -349,5 +363,6 @@ export function demoCaptain(): Captain {
       state: { value: "done", status: "done" },
     });
     await session.emitStatus("◇ /code finished");
+    await context.emitReply("Done — the requested change is ready.");
   });
 }

@@ -423,8 +423,8 @@ test.describe("removing a History row", () => {
     const band = page.getByTestId(`history-${projectId}`);
     // By id, not by text: the confirm takes the row's place while it
     // stands, so its title is not there to match on.
-    const row = band.getByTestId("history-row-seeded-003");
-    const neighbour = band.getByTestId("history-row-seeded-002");
+    const row = band.getByTestId("history-row-72000000-0000-4000-8000-000000000003");
+    const neighbour = band.getByTestId("history-row-72000000-0000-4000-8000-000000000002");
     await expect(row).toContainText("Seeded done work 3");
     const control = row.getByRole("button", {
       name: "Remove Seeded done work 3 from history",
