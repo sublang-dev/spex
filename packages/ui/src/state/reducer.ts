@@ -5,7 +5,10 @@
 // into view state. Everything the run view renders derives from
 // protocol messages — no other inputs (RUN-13).
 
-import type { TmuxPlayRecord } from "@sublang/spex-core/protocol";
+import {
+  hasPresentationHeader,
+  type TmuxPlayRecord,
+} from "@sublang/spex-core/protocol";
 
 import { plainFailure } from "../lib/labels.js";
 
@@ -323,6 +326,7 @@ export function applyRecord(
   role?: string,
 ): SessionView {
   view.lastSeq = Math.max(view.lastSeq, seq);
+  if (!hasPresentationHeader(record)) return view;
   const r = record as unknown as Record<string, unknown> & {
     type: string;
     turnId: number | null;

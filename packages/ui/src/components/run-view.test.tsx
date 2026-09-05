@@ -135,6 +135,106 @@ function renderRun(entries: typeof FULL_RUN) {
   );
 }
 
+describe("run-view-14: opaque records in the protocol stream", () => {
+  test("advances past opaque entries without changing the turn or dispatching its queue", () => {
+    const previous = useAppStore.getState();
+    const command = vi.fn(async () => ({}));
+    setClientForTests({ command } as never);
+    useAppStore.setState({
+      sessions: [SESSION],
+      activeSessionId: SESSION.id,
+      views: { s1: initialSessionView(PLAYERS) },
+      composers: { s1: { queued: [{ text: "Queued follow-up" }] } },
+      collapsedLanes: { s1: ["dev.reviewer"] },
+      specTrees: {},
+      ledger: undefined,
+      stagedIntents: {},
+    });
+
+    function ConnectedRun() {
+      const view = useAppStore((state) => state.views.s1);
+      const composer = useAppStore((state) => state.composers.s1);
+      return (
+        <RunView
+          session={SESSION}
+          view={view}
+          composer={composer}
+          connected
+          onSubmit={async () => {}}
+          onAbort={() => {}}
+          onRemoveQueued={() => {}}
+          onDismissError={() => {}}
+        />
+      );
+    }
+
+    let seq = 0;
+    function deliver(record: Record<string, unknown>): void {
+      act(() => {
+        deliverServerMessageForTests({
+          type: "record",
+          channel: "session",
+          sessionId: SESSION.id,
+          seq: ++seq,
+          record: record as unknown as TmuxPlayRecord,
+        });
+      });
+    }
+
+    const rendered = render(<ConnectedRun />);
+    try {
+      deliver({
+        type: "turn_started", turnId: 1, timestamp: 1,
+        turn: { id: 1, prompt: "Original task", timestamp: 1 },
+      });
+      for (const record of [
+        { opaque: { preserved: true } },
+        { timestamp: 2 },
+        { type: "turn_started" },
+        { type: "player_event", playerId: "dev.reviewer" },
+        { type: "player_prompt", playerId: "dev.reviewer", prompt: "Invisible" },
+        { type: "turn_finished", turnId: 1 },
+        { type: "turn_aborted", turnId: 1 },
+        { type: "future_record", timestamp: 3 },
+      ]) deliver(record);
+
+      expect(useAppStore.getState().views.s1).toEqual({
+        ...initialSessionView(PLAYERS),
+        captain: [{ kind: "boss", text: "Original task", turnId: 1, at: 1 }],
+        currentTurnId: 1,
+        turnActive: true,
+        lastSeq: seq,
+      });
+      expect(useAppStore.getState().collapsedLanes.s1).toEqual(["dev.reviewer"]);
+      expect(screen.getByTestId("player-pane-dev.reviewer").dataset.collapsed).toBe("true");
+      expect(useAppStore.getState().composers.s1.queued).toEqual([
+        { text: "Queued follow-up" },
+      ]);
+      expect(command).not.toHaveBeenCalled();
+      expect(screen.getByTestId("boss-bubble").textContent).toContain("Original task");
+      expect(screen.queryByText("Invisible")).toBeNull();
+
+      deliver({ type: "captain_reply", turnId: 1, timestamp: 4, text: "A valid later reply" });
+      expect(screen.getByText("A valid later reply")).toBeTruthy();
+      expect(useAppStore.getState().views.s1.lastSeq).toBe(seq);
+      expect(command).not.toHaveBeenCalled();
+
+      deliver({ type: "turn_finished", turnId: 1, timestamp: 5 });
+      expect(useAppStore.getState().views.s1.turnActive).toBe(false);
+      expect(useAppStore.getState().views.s1.lastSeq).toBe(seq);
+      expect(useAppStore.getState().composers.s1.queued).toEqual([]);
+      expect(command.mock.calls).toEqual([
+        ["turn.submit", { sessionId: "s1", text: "Queued follow-up" }],
+        ["session.viewed", { sessionId: "s1", turnId: 1 }],
+      ]);
+    } finally {
+      rendered.unmount();
+      useAppStore.setState(previous);
+      setClientForTests(undefined);
+    }
+  });
+});
+
 describe("RUN-30: boss messages echo as user bubbles", () => {
   test("the submitted turn text renders as a boss bubble", () => {
     renderRun(TURN_ONE);

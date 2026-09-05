@@ -7,11 +7,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { WebSocket } from "ws";
+import { openSessionStore } from "@sublang/playbook/session-store";
 
 import { CoreService } from "./service.js";
 import { templatePath } from "./config.js";
@@ -1654,6 +1655,117 @@ function turnIds(records: StoredRecord[]): number[] {
     .map((entry) => (entry.record as { turn: { id: number } }).turn.id);
 }
 
+test("core-service-22/62: opaque v1 records survive native restart and CLI replay without truncating history", async (t) => {
+  const harness = await startHarness();
+  let service = harness.service;
+  let client = new Client(service.port());
+  t.after(async () => {
+    client.close();
+    await service.stop();
+    rmSync(harness.dir, { recursive: true, force: true });
+  });
+  await client.open();
+  const project = await client.expectOk("project.register", { path: harness.projectDir });
+  const native = await client.expectOk("session.create", { projectId: project.id });
+  await client.expectOk("subscribe", { channel: { kind: "session", sessionId: native.id } });
+  await client.expectOk("turn.submit", { sessionId: native.id, text: "known native turn" });
+  await client.waitFor((message) => message.type === "record" && message.sessionId === native.id && message.record.type === "turn_finished");
+  await client.expectOk("session.dispose", { sessionId: native.id });
+  const nativeUsage = await client.expectOk("usage.get", { sessionId: native.id });
+  client.close();
+  await service.stop();
+
+  const sessionsDir = join(harness.dataDir, "sessions");
+  const nativeStream = join(sessionsDir, `${native.id}.records.jsonl`);
+  const original = readFileSync(nativeStream, "utf8").trimEnd().split("\n").map((line) => JSON.parse(line));
+  const opaque = [
+    {},
+    { type: "future_context", playerId: "not-a-player", timestamp: 1700 },
+    { type: "opaque_record", nested: { retained: true } },
+    { type: 7, timestamp: "not a presentation timestamp" },
+    { type: "turn_started" },
+    { type: "player_event", playerId: "not-a-player" },
+    { type: "runtime_error", message: "not a presentation record" },
+  ];
+  const nativeEntries = [
+    { record: opaque[0] }, original[0],
+    ...opaque.slice(1).map((record) => ({ record })),
+    ...original.slice(1), { record: {} },
+  ].map((entry, index) => ({ ...entry, v: 1, seq: index + 1 }));
+  const nativeBytes = nativeEntries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+  writeFileSync(nativeStream, nativeBytes);
+
+  const foreignId = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+  const foreignRecords = [
+    opaque[0], ...foreignTurn("known CLI turn").slice(0, 1),
+    ...opaque.slice(1), ...foreignTurn("known CLI turn").slice(1), {},
+  ];
+  writeForeignSession(sessionsDir, foreignId, harness.projectDir, foreignRecords);
+  const foreignStream = join(sessionsDir, `${foreignId}.records.jsonl`);
+  // The released Playbook reader is the compatibility oracle, including
+  // its private-file boundary; no duplicate mock parser defines v1 here.
+  chmodSync(sessionsDir, 0o700);
+  chmodSync(foreignStream, 0o600);
+  const playbook = openSessionStore(sessionsDir);
+  const expectedForeign = (await playbook.readStream(foreignId)).entries;
+  assert.equal(expectedForeign.length, foreignRecords.length);
+  const foreignBytes = readFileSync(foreignStream, "utf8");
+  const opaqueId = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb";
+  writeForeignSession(sessionsDir, opaqueId, harness.projectDir, [{}, { type: "future" }]);
+  const createdAt = "2026-09-01T01:00:00.000Z";
+  const updatedAt = "2026-09-01T02:00:00.000Z";
+  writeFileSync(join(sessionsDir, `${opaqueId}.json`), JSON.stringify({
+    sessionId: opaqueId, cwd: harness.projectDir, createdAt, updatedAt,
+  }));
+  writeFileSync(join(harness.dir, "playbook.config.yaml"), `sessions: ${sessionsDir}\n${VALID_CONFIG}`);
+
+  service = await CoreService.start({
+    token: "test", configPath: join(harness.dir, "playbook.config.yaml"),
+    dataDir: harness.dataDir, env: {}, home: join(harness.dir, "home"),
+    watchConfig: true,
+  });
+  client = new Client(service.port());
+  await client.open();
+  const sessions = await client.expectOk("session.list", {});
+  const nativeInfo = sessions.find((session) => session.id === native.id);
+  assert.equal(nativeInfo?.title, "known native turn");
+  assert.equal(nativeInfo?.turns, 1);
+  assert.equal(nativeInfo?.failed, false);
+  assert.equal(nativeInfo?.streamIncompleteAfterSeq, undefined);
+  assert.equal(nativeInfo?.continuable, true);
+  assert.equal(JSON.parse(readFileSync(join(sessionsDir, `${native.id}.spex.json`), "utf8")).streamIncompleteAfterSeq, undefined);
+  assert.deepEqual(await client.expectOk("usage.get", { sessionId: native.id }), nativeUsage);
+  const withoutEnvelopeVersion = ({ v: _v, ...entry }: { v: number }) => entry;
+  const visible = (entry: { record: object }) => (entry.record as { visibility?: unknown }).visibility !== "hidden";
+  assert.deepEqual((await client.expectOk("history.get", { sessionId: native.id })).records,
+    nativeEntries.filter(visible).map(withoutEnvelopeVersion));
+  assert.deepEqual((await client.expectOk("history.get", { sessionId: foreignId })).records,
+    expectedForeign.filter(visible).map(withoutEnvelopeVersion));
+  const foreignInfo = sessions.find((session) => session.id === foreignId);
+  assert.equal(foreignInfo?.title, "known CLI turn");
+  assert.equal(foreignInfo?.turns, 1);
+  assert.equal(foreignInfo?.failed, false);
+  assert.deepEqual(foreignInfo?.players, []);
+  assert.equal(foreignInfo?.createdAt, 1000);
+  assert.equal(foreignInfo?.endedAt, 2000);
+  const opaqueInfo = sessions.find((session) => session.id === opaqueId);
+  assert.equal(opaqueInfo?.createdAt, Date.parse(createdAt));
+  assert.equal(opaqueInfo?.endedAt, Date.parse(updatedAt));
+  assert.equal(opaqueInfo?.turns, 0);
+
+  await client.expectOk("subscribe", { channel: { kind: "session", sessionId: foreignId } });
+  const appended = [{ type: "future" }, { type: "captain_reply", turnId: 1, timestamp: 3000, text: "after opaque records" }];
+  appendFileSync(foreignStream, appended.map((record, index) => JSON.stringify({
+    v: 1, seq: foreignRecords.length + index + 1, record,
+  })).join("\n") + "\n");
+  await client.waitFor((message) => message.type === "record" && message.sessionId === foreignId && message.seq === foreignRecords.length + 2);
+  assert.deepEqual(client.records("session").map((message) => message.record), appended);
+  assert.equal((await client.expectOk("history.get", { sessionId: foreignId })).records.at(-1)?.seq, foreignRecords.length + 2);
+  assert.equal(readFileSync(nativeStream, "utf8"), nativeBytes);
+  assert.ok(readFileSync(foreignStream, "utf8").startsWith(foreignBytes));
+  assert.ok(!existsSync(join(sessionsDir, `${foreignId}.spex.json`)));
+});
+
 test("core-service-22: damaged native streams remain readable but cannot continue after restart", async (t) => {
   const harness = await startHarness();
   let service = harness.service;
@@ -1674,6 +1786,9 @@ test("core-service-22: damaged native streams remain readable but cannot continu
     { name: "malformed complete line", suffix: () => "{broken}\n" },
     { name: "sequence gap", suffix: (seq: number) => envelope(seq + 1) + "\n", retainSuffix: true },
     { name: "unknown version", suffix: (seq: number) => envelope(seq, 2) + "\n" },
+    { name: "non-object record", suffix: (seq: number) => JSON.stringify({ v: 1, seq, record: null }) + "\n" },
+    { name: "unknown envelope member", suffix: (seq: number) => JSON.stringify({ ...JSON.parse(envelope(seq)), extra: true }) + "\n" },
+    { name: "non-string role", suffix: (seq: number) => JSON.stringify({ ...JSON.parse(envelope(seq)), role: 7 }) + "\n" },
     { name: "earlier incomplete marker", suffix: (seq: number) => envelope(seq), earlier: true },
   ];
   const damaged: {

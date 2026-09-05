@@ -48,7 +48,7 @@ Each complete UTF-8 JSON line has the closed envelope:
 - `v`: envelope version, currently `1`.
 - `seq`: positive contiguous sequence from `1` across the session, assigned by its writer.
 - `role`: optional local playbook role; distinct from the participant identity inside `record`.
-- `record`: token-free JSON event. Event types carry Captain messages, player prompts/results, visibility, usage, and machine traces; the envelope alone does not define their semantics.
+- `record`: token-free opaque JSON object; the v1 envelope requires neither `type` nor `timestamp`. Known presentation records carry those fields for Captain messages, player prompts/results, visibility, usage, and machine traces.
 - A reader consumes complete newline-terminated records. Legacy gaps may remain viewable without proving safe continuation.
 
 The stream records what was presented or observed; it does not authorize repeating external effects.

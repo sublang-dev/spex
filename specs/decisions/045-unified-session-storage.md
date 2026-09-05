@@ -7,7 +7,7 @@
 
 Proposed (2026-09-04); would amend:
 
-- [DR-036](036-file-state-store.md): session file ownership, default location, and portable backup rules.
+- [DR-036](036-file-state-store.md): session file ownership, default location, and Git synchronization.
 - [DR-037](037-playbook-12-adoption.md): host integration and effect-ledger durability.
 - [DR-042](042-sessions-continue.md): recovery authority, cross-interface continuation, local provider hints, and deletion.
 
@@ -24,8 +24,7 @@ Proposed (2026-09-04); would amend:
 
 - Spex owns home and application-data contracts; Playbook owns shared session schemas, validation, migration and lifecycle, including continuation and deletion regardless of the creating interface.
 - All Spex-owned durable data defaults to `${SPEX_HOME:-~/.spex}`, including `sessions/`; explicit config/store overrides remain authoritative.
-- One core per state root and one writer per session; mutations require the applicable lease, including import and deletion.
-- Cross-machine transfer uses quiescent exports; concurrent multi-machine writing is unsupported.
+- One core per state root and one writer per session; mutations require the applicable lease, including migration and deletion.
 
 | Portable session file | Authority |
 | --- | --- |
@@ -36,9 +35,16 @@ Proposed (2026-09-04); would amend:
 - Checkpoints identify a durably recorded replay prefix by sequence and digest; recording failure preserves uncertainty rather than inventing history.
 - Preserve the recovery journal independently of replay; derive summaries, usage and graph activity, and observe liveness from the lease/runtime.
 - Retain Playbook's recovery snapshots and effect evidence; ledger compaction is deferred and must preserve recovery without presentation history.
-- History remains readable, exportable and deletable without executable modules or a supported checkpoint; older writers preserve unknown versions without rewriting them.
-- Cutover stops old writers, imports desktop sidecars once into common manifests, retires the sidecar writer, and moves both defaults to `${SPEX_HOME:-~/.spex}/sessions`; explicit overrides stand.
-- Validate bundles before activation and retain sources; CLI schemas 2–5 and incompatible desktop checkpoints remain history only, without inventing missing recovery authority.
+- History remains readable and deletable without executable modules or a supported checkpoint; older writers preserve unknown versions without rewriting them.
+- Cutover stops old writers, converts desktop sidecars once into common manifests while retaining migration sources, retires the sidecar writer, and moves both defaults to `${SPEX_HOME:-~/.spex}/sessions`; explicit overrides stand.
+- CLI schemas 2–5 and incompatible desktop checkpoints remain history only, without inventing missing recovery authority.
+
+### Replay compatibility
+
+- The frozen v1 envelope accepts an opaque JSON object as `record`; neither `type` nor `timestamp` is universally required.
+- Readers preserve structurally valid unknown records, including legacy records without timestamps, count their sequences and digest contribution, and skip unsupported presentation; unfamiliar content alone is not corruption.
+- Every new execution-context kind defines a string `type` and finite numeric `timestamp`; unknown required recovery context prevents continuation without damaging history.
+- Both hosts adopt shared framing and compatible readers before new writers emit additional record kinds.
 
 ### Presentation and provider continuity
 
@@ -47,40 +53,30 @@ Proposed (2026-09-04); would amend:
 - Missing hints start fresh conversations; definite pre-execution session rejection permits one fresh attempt inside the same logical call, invalidating the rejected hint.
 - Cligent classifies rejection; Playbook supplies Captain's recovery journal or the player's complete task prompt, preserves effect authority, and records the continuity reset.
 - Ambiguous execution failures receive no automatic retry; provider-only knowledge is not recoverable.
-- Repositories, provider credentials and provider histories remain external; leases, hints and caches are excluded from exports.
+- Repositories, provider credentials and provider histories remain external.
 
-### Merge
+### Git synchronization
 
-Local shared storage needs no merge.
-Offline import compares validated session bundles—manifest and stream together—never timestamps or independently selected files.
+- Git is the only synchronization path: one repository with shared ancestry, one branch per device/root, merged to and from `main`; desktop and CLI share that root and branch.
+- Stop all local writers throughout commit, checkout and merge; only one device executes a given session at a time, since leases do not coordinate devices.
+- Keep provider hints, leases and retired guards, caches, migration receipts and destination path bindings untracked and ignored; overrides outside the Git root do not participate.
+- Resolve session changes relative to Git's common ancestor as whole bundles from the pre-merge branch tips, including absence:
 
-| Copies | Result |
+| Session changes | Result |
 | --- | --- |
-| Different session IDs | Keep both. |
-| Equivalent bundles | Deduplicate. |
-| Same checkpoint/context, compatible replay prefix extension | Keep the longer validated prefix, preserving gap markers. |
-| One bundle unchanged from a known common baseline; the other's history unchanged or extended | Take the changed whole bundle. |
-| Divergent histories, conflicting checkpoints, or insufficient evidence | Preserve both as a conflict outside the active session namespace; no automatic resumption. |
+| Neither side changed, or both tips agree | Keep the agreed bundle or deletion. |
+| One side changed | Take that side's complete bundle or deletion. |
+| Both sides changed differently | Choose whole-session ours or theirs, even when Git reports a clean text merge. |
 
-- Divergence overrides baseline selection; a baseline is optional backup/import evidence, not permanent checkpoint ancestry.
-- Never concatenate branches, renumber turns, merge effect ledgers, or authorize execution merely by selecting a bundle; conflicting effects require reconciliation.
-
-| Other data | Rule |
-| --- | --- |
-| Projects and saved sources | Union distinct identities; deduplicate equals; select one-sided baseline changes; preserve conflicts. |
-| Intent logs | Equal or strict-prefix merge only. |
-| Config | Whole validated document; select one-sided baseline changes, otherwise resolve conflicts; preserve comments. |
-| Preferences | Union distinct keys; select one-sided baseline changes; unresolved differences keep destination values. |
-| Viewed markers | Furthest viewed turn on identical history only. |
+- Never independently merge a session's manifest and stream; hunk preferences such as `-X ours` are not whole-session selection.
+- Other structured files use the same three-way rule per file, including whole-file choice despite a clean text merge; retain merge ancestry so discarded versions remain recoverable in Git.
+- Validate the selected store before reopening; bundle selection neither clears uncertainty nor undoes external effects, and omitted executed work requires reconciliation before continuation.
 
 ### Deletion
 
-Missing files do not imply deletion.
-A session tombstone records its ID and deleted-bundle digest: suppress matching old copies, conflict with changed copies, and retain deletion evidence until its backup horizon is deliberately forgotten.
-
-- Under the shared lease, deletion removes the manifest, replay stream, local provider hints, any active legacy sidecar, and derived session state; the tombstone, preserved backups and unresolved conflict copies remain.
-- Publish deletion evidence before removing files; interrupted cleanup is recoverable, and normal lease refusal rules include active or unprovable ownership.
-- Retired lease directories remain as guards against delayed reclaimers; removing them requires fencing all prior owners and contenders, which the current session lease does not establish.
+- Under the shared lease, remove the replay stream, local hints, any active legacy sidecar and derived session state, then the manifest last; interrupted cleanup is safe to retry and cannot authorize continuation from an incomplete bundle.
+- Active or unprovable ownership refuses deletion; retired lease directories remain as guards against delayed reclaimers.
+- Git records deletion as tracked file removal; delete-versus-modify follows whole-session selection, without application tombstones or conflict copies.
 
 ### Contracts required before cutover
 
@@ -89,12 +85,12 @@ The remaining definitions are:
 
 | Owner | Required definition |
 | --- | --- |
-| Playbook | Manifest/context versions and fields, context references and digest encoding, and hint/tombstone/staging/conflict paths and encodings. |
-| Spex | Destination project bindings; core-managed portable UI preferences; destination-local import receipts and backup retention; library source preservation and rebuilding before generated outputs are omitted. |
+| Playbook | Manifest/context versions and fields; record headers and unknown-kind rules; context references, digest encoding and local hint format. |
+| Spex | Whole-session Git selection and store validation; ignored local data and destination bindings; portable UI preferences; local migration receipts; library source preservation and rebuilding before generated outputs are omitted. |
 
 ## Consequences
 
 - Shared recovery replaces desktop's sidecar authority, separate restoration and in-memory substitute ledger.
 - History is portable; exact workflow resumption remains runtime-compatible, with fresh provider conversations as a fallback.
-- Coordinated Spex, Playbook and Cligent contracts precede rollout; no database, distributed merge engine, or permanent checkpoint history is added.
+- Coordinated Spex, Playbook and Cligent contracts precede rollout; Git supplies ancestry and recovery history, with no separate synchronization engine.
 - Accepted storage requirements belong in their owners' spec packages; the inventory remains descriptive.

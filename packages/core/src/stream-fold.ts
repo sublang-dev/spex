@@ -8,6 +8,7 @@
 // live tracking derived.
 
 import type { TmuxPlayRecord } from "./protocol.js";
+import { hasPresentationHeader } from "./protocol.js";
 
 export interface UsageEntry {
   sessionId: string;
@@ -71,6 +72,7 @@ export type TurnEvent =
 
 /** The turn transition a record carries, if any. */
 export function foldTurnEvent(record: TmuxPlayRecord): TurnEvent | undefined {
+  if (!hasPresentationHeader(record)) return undefined;
   switch (record.type) {
     case "turn_started": {
       const turn = (record as { turn: { id: number; prompt: string } }).turn;
@@ -94,6 +96,7 @@ export function foldUsage(
   sessionId: string,
   record: TmuxPlayRecord,
 ): UsageEntry | undefined {
+  if (!hasPresentationHeader(record)) return undefined;
   if (record.type !== "player_event" && record.type !== "captain_event") {
     return undefined;
   }

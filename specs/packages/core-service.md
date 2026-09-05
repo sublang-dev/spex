@@ -263,6 +263,7 @@ The core service shall persist each session as files in the shared session store
 - Where a session was live at shutdown, the next startup reports that session as no longer live, its snapshot kept so it lists continuable [[core-service-32](#core-service-32)].
 - The synthesized visible failure record [[core-service-30](#core-service-30)] is persisted in the stream, so replay carries what live subscribers saw.
 - The stream is a token-free replay projection: provider resume tokens are stripped before a record is served or persisted, the session manifest being their only durable home ([DR-036](../decisions/036-file-state-store.md)).
+- A valid v1 envelope carries an opaque JSON object: unknown kinds and objects without a presentation header remain in history and sequence accounting, without marking damage; presentation folds ignore records lacking a string `type` and finite numeric `timestamp`.
 - When a record cannot be durably appended, the record is still delivered and served from memory, no further stream write is attempted for that session, and the session's listing marks the stream incomplete after its last durable sequence — truncated history is never presented as complete.
 - A native stream with an unterminated tail, malformed record envelope, or broken sequence at startup persists the incomplete marker at the last contiguous valid sequence, preserving an earlier marker and leaving the stream unchanged, so continuation is refused [[core-service-73](#core-service-73)]; increasing records beyond a sequence gap remain readable for legacy imported history.
 
@@ -275,6 +276,7 @@ The core service shall serve every session present in the shared session store's
 - an arrival or change while the service runs is announced to subscribed clients as a session-state report, with `intents.changed` where a derived intent state can change [[core-service-51](#core-service-51)]; a record's disappearance is forgotten [[core-service-76](#core-service-76)];
 - a stream append also reaches that session's subscribers through the record visibility filter [[core-service-8](#core-service-8)], once per appended record, without waiting for directory activity to stop; a replacement history is served on the next history request;
 - each session is read independently from its complete newline-terminated stream prefix, so an unfinished final line waits for its newline and an unreadable manifest preserves its previous served history without hiding healthy neighbors;
+- opaque records remain readable under [[core-service-10](#core-service-10)]; summary times use the first and last finite record timestamps, falling back to manifest creation/update times or zero when unavailable;
 - registering a project [[core-service-4](#core-service-4)] lists the sessions the directory already holds for it, without waiting for a new record.
 
 #### core-service-76
@@ -493,6 +495,7 @@ Where a session has completed a Boss turn, the test suite shall stop the core se
 - Where records carry provider resume tokens — in a result and in a `playbook.trace` payload — the suite shall assert the persisted and replayed stream carries none of them [[core-service-10](#core-service-10)].
 - Where the stream file becomes unappendable mid-session, the suite shall assert the fail-soft contract of [[core-service-10](#core-service-10)]: the record is still served from memory, the listing marks the stream incomplete after the last durable sequence, and the mark survives a restart.
 - Where a native stream is damaged before restart, the suite shall assert its valid history remains readable, its persisted incomplete marker keeps any earlier boundary [[core-service-10](#core-service-10)], and a Boss submission refuses continuation without appending to the damaged stream [[core-service-73](#core-service-73)].
+- Where a native stream contains opaque v1 objects among ordinary records, the suite shall assert restart preserves all records and sequences without an incomplete marker, retains later turn and usage folds, and leaves stream bytes unchanged [[core-service-10](#core-service-10)].
 - Where the shell names a legacy SQLite store holding sessions and intents, beside a legacy library directory the shared config's `from` paths point into, the suite shall assert the one-time import of [[core-service-64](#core-service-64)]: the rows serve identically from the file state, the library relocates with its `from` paths rewritten and comments kept, the legacy store file is untouched, and a second startup imports nothing twice.
 
 #### core-service-62
@@ -504,6 +507,7 @@ Where a fixture session — manifest naming a registered project's directory as 
 - a session-state report announcing the second session reaches a subscribed client [[core-service-60](#core-service-60)];
 - after the terminal appends to an already listed session's stream without replacing its manifest, the listing and history reflect the new title and turns, and the session subscriber receives each appended visible record once even during continuous directory activity, with the complete but unterminated final record withheld until its newline arrives [[core-service-60](#core-service-60)];
 - rescanning the same streams leaves their turn and usage folds unchanged, replacing a stream refreshes its title and history, and a malformed neighboring manifest hides no healthy session [[core-service-60](#core-service-60)];
+- opaque v1 objects at the beginning, middle and end remain in history without hiding later records or inventing players, turns or failures; timestamps remain finite, including a stream containing only opaque objects [[core-service-60](#core-service-60)];
 - a fixture session whose working directory matches no registered project is absent from the listing [[core-service-60](#core-service-60)];
 - a fixture record with a Boss journal and no stream lists with the first Boss entry as its title, its Boss turns counted, and a history of turn starts, Captain replies, and turn finishes [[core-service-60](#core-service-60)];
 - every fixture file is byte-identical once the service stops, and no sidecar joins them [[core-service-65](#core-service-65)].

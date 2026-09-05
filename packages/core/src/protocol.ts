@@ -13,6 +13,12 @@ export const PROTOCOL_VERSION = 6;
 
 export type { TmuxPlayRecord };
 
+/** The v1 stream also carries opaque objects. This header gates only
+ * presentation, never whether a stored envelope is valid. */
+export function hasPresentationHeader(record: TmuxPlayRecord): boolean {
+  return typeof record.type === "string" && Number.isFinite(record.timestamp);
+}
+
 // ---------------------------------------------------------------------------
 // Shared shapes
 // ---------------------------------------------------------------------------

@@ -40,6 +40,7 @@ import type {
   StoredRecord,
   TmuxPlayRecord,
 } from "./protocol.js";
+import { hasPresentationHeader } from "./protocol.js";
 import {
   foldTurnEvent,
   foldUsage,
@@ -224,9 +225,10 @@ function readRecordsPrefix(file: string, retainSequenceGaps = false): { records:
         !entry || typeof entry !== "object" ||
         entry.v !== 1 || typeof entry.seq !== "number" ||
         !Number.isSafeInteger(entry.seq) || entry.seq <= lastSeq ||
+        Object.keys(entry).some((key) => !["v", "seq", "role", "record"].includes(key)) ||
+        (entry.role !== undefined && typeof entry.role !== "string") ||
         !entry.record || typeof entry.record !== "object" ||
-        Array.isArray(entry.record) || typeof entry.record.type !== "string" ||
-        !Number.isFinite(entry.record.timestamp)
+        Array.isArray(entry.record)
       ) {
         markIncomplete();
         break;
@@ -237,6 +239,8 @@ function readRecordsPrefix(file: string, retainSequenceGaps = false): { records:
         // records stay readable, but never certify safe continuation.
         if (!retainSequenceGaps) break;
       }
+      // Payloads are opaque in v1; only their presenters require a
+      // type and timestamp. Unknown records still consume a sequence.
       const { v: _v, ...kept } = entry;
       records.push(kept as StoredRecord);
       lastSeq = entry.seq;
@@ -652,15 +656,20 @@ export class Store {
       const players = [
         ...new Set(
           stored
+            .filter((entry) => hasPresentationHeader(entry.record) &&
+              (entry.record.type === "player_prompt" || entry.record.type === "player_event" || entry.record.type === "player_finished"))
             .map((entry) => (entry.record as { playerId?: unknown }).playerId)
             .filter((playerId): playerId is string => typeof playerId === "string"),
         ),
       ];
+      const timestamps = stored.map((entry) => entry.record.timestamp).filter(Number.isFinite);
+      const createdAt = timestamps[0] ?? (Date.parse(String(record.createdAt)) || 0);
+      const endedAt = timestamps.at(-1) ?? (Date.parse(String(record.updatedAt)) || createdAt);
       const meta: SessionMeta = {
         id,
         projectId: project.id,
-        createdAt: stored[0].record.timestamp,
-        endedAt: stored[stored.length - 1].record.timestamp,
+        createdAt,
+        endedAt,
         // Liveness belongs to the core that runs a session; a session
         // another host wrote is never live here (core-service-10).
         live: false,
@@ -1080,7 +1089,7 @@ export class Store {
       (a, b) => a.turnId - b.turnId,
     );
     const failed = (this.records.get(meta.id) ?? []).some(
-      (entry) => entry.record.type === "runtime_error",
+      (entry) => hasPresentationHeader(entry.record) && entry.record.type === "runtime_error",
     );
     const costed = (this.usage.get(meta.id) ?? []).filter(
       (entry) => entry.totalCostUsd !== undefined,
@@ -1181,6 +1190,7 @@ export class Store {
   ): number {
     let count = 0;
     for (const entry of this.records.get(sessionId) ?? []) {
+      if (!hasPresentationHeader(entry.record)) continue;
       const turnId = entry.record.turnId;
       if (entry.role !== role || entry.record.type !== "player_prompt") continue;
       if (turnId === null || turnId < fromTurnId) continue;
@@ -1199,6 +1209,7 @@ export class Store {
   ): { turnId: number | null; timestamp: number }[] {
     const out: { turnId: number | null; timestamp: number }[] = [];
     for (const entry of this.records.get(sessionId) ?? []) {
+      if (!hasPresentationHeader(entry.record)) continue;
       if (entry.record.type !== "runtime_error") continue;
       const turnId = entry.record.turnId;
       // A null-turn error belongs to no turn range, exactly as the

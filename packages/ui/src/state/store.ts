@@ -8,6 +8,7 @@
 // records via history afterSeq, so panes never silently freeze.
 
 import { create } from "zustand";
+import { hasPresentationHeader } from "@sublang/spex-core/protocol";
 import type {
   AgentBlockInput,
   BuiltinPlaybookInfo,
@@ -404,7 +405,7 @@ export const useAppStore = create<AppState>((set, get) => {
     role?: string,
   ): void {
     applyRecord(view, seq, record, role);
-    if (record.type === "player_prompt") {
+    if (hasPresentationHeader(record) && record.type === "player_prompt") {
       get().setLaneCollapsed(sessionId, String(record.playerId), false);
     }
   }
@@ -536,7 +537,10 @@ export const useAppStore = create<AppState>((set, get) => {
 
         set(updates);
         // Dispatch a queued submission when the turn ends (RUN-8).
-        if (record.type === "turn_finished" || record.type === "turn_aborted") {
+        if (
+          hasPresentationHeader(record) &&
+          (record.type === "turn_finished" || record.type === "turn_aborted")
+        ) {
           maybeDispatchQueued(sessionId);
           // Agents may have rewritten specs during the turn: re-read
           // any loaded tree for this project (DR-011 freshness).
