@@ -5,7 +5,8 @@
 
 ## Status
 
-In progress; implementation and public releases authorized (2026-09-05).
+In progress; implementation verified against the packed candidate (2026-09-05).
+Published Playbook adoption, live/manual acceptance and publication remain pending.
 
 ## Intent
 
@@ -13,11 +14,13 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 
 ## Deliverables
 
-- [ ] Adopt the released shared session codec/lifecycle and retire desktop sidecar authority.
-- [ ] Migrate application files, local bindings/viewed markers and managed library locators.
-- [ ] Add whole-unit Git selection and pre-reopen validation.
-- [ ] Render historical context/graphs and manage sessions from either host.
-- [ ] Complete the owning packages' integration matrices.
+- [x] Route desktop sessions through the shared codec/lifecycle and retire sidecar authority.
+- [x] Migrate application files, local bindings/viewed markers and managed library locators.
+- [x] Add whole-unit Git selection and pre-reopen validation.
+- [x] Render historical context/graphs and manage sessions from either host.
+- [x] Complete the owning packages' integration matrices against the packed candidate.
+- [ ] Adopt published Playbook in the registry lockfile.
+- [ ] Complete coordinated release acceptance and publication.
 
 ## Tasks
 
@@ -39,4 +42,7 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 ## Verification
 
 - Required acceptance behavior is specified in storage, core-service, projects, run-view and playbook-library.
-- Application storage, Git selection, real-shell continuation, cross-host recovery and browser recovery matrices pass against the working shared runtime. Coordinated registry-only release gates remain.
+- Against packed Playbook `a6ff03b9` and published Cligent `0.25.0`, 833 tests and 40 browser journeys pass across bounded runs, including corrected fixture cases; core round-trip, packed CLI, Electron render and native ABI restoration pass.
+- The installed Playbook files match the candidate; registry lockfile adoption awaits publication.
+- Live checks await explicit approval after automatic review refused execution; manual desktop acceptance awaits an unlocked Mac.
+- Detailed results and remaining release gates are recorded in [release preparation](../../docs/releases/0.5.0-preparation.md).
