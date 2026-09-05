@@ -5,7 +5,7 @@
 
 ## Status
 
-Planned; no runtime implementation before the owner reviews the coordinated storage specifications and catalog.
+Planned; implementation awaits separate owner authorization.
 
 ## Intent
 

@@ -5,8 +5,8 @@
 
 ## Status
 
-Proposed; awaiting owner review.
-Proposes amendments to:
+Accepted (2026-09-05).
+Amends:
 
 - [DR-036](036-file-state-store.md): storage ownership, default locations, local data and Git synchronization.
 - [DR-037](037-playbook-12-adoption.md): host integration and effect-ledger durability.

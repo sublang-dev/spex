@@ -8,6 +8,7 @@
 Accepted (2026-08-29).
 Amended by [DR-042](042-sessions-continue.md): the resume experience deferred below is decided — a token-free snapshot in the sidecar continues an ended session — and deletion is the one write that crosses hosts.
 Amends [DR-004](004-config-and-persistence.md) (the app-local SQLite store retires in favor of plain files), [DR-033](033-remote-gui-serving.md) (the per-shell store gives way to one shared state root), and [DR-035](035-intent-ledger.md)'s storage form (the intents table becomes an act log; every fold contract stands).
+Amended by [DR-045](045-unified-session-storage.md): storage ownership, default locations, local files and Git synchronization.
 
 ## Context
 

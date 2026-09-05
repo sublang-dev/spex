@@ -4,7 +4,7 @@
 # Current storage inventory
 
 Writers inspected on 2026-09-05; this inventory defines no new contract.
-[DR-045](../../specs/decisions/045-unified-session-storage.md) records the proposed replacement and links its owning contracts.
+[DR-045](../../specs/decisions/045-unified-session-storage.md) records the accepted replacement and links its owning contracts.
 The [storage catalog](../storage.md) explains the target layout for readers.
 
 ## Paths
@@ -80,7 +80,7 @@ Playbook validates nested payloads, versions, and relationships; field presence 
 Encoding: `{v:1,id,projectId,createdAt,endedAt,live,players,initialVisible,streamIncompleteAfterSeq?,snapshot?}`.
 Timestamps are numeric; `endedAt` can be null.
 `snapshot` is `{v:1,shell?}`; token removal covers known Captain/player/frame fields, not every nested recovery payload.
-`players` contains `{id,adapter,model?,fastMode?}` entries, without the full settings or binding context proposed for the unified format.
+`players` contains `{id,adapter,model?,fastMode?}` entries, without the full settings or binding context defined for the unified format.
 `live` is reset after restart; `streamIncompleteAfterSeq` blocks continuation without discarding readable history.
 The sidecar lacks the CLI's complete recovery contract.
 

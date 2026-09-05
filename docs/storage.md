@@ -3,7 +3,7 @@
 
 # The `~/.spex` catalog
 
-This catalog describes the proposed storage contract in [DR-045](../specs/decisions/045-unified-session-storage.md).
+This catalog describes the storage contract in [DR-045](../specs/decisions/045-unified-session-storage.md).
 Implementation is pending; the [current inventory](design/unified-storage.md) records today's layout.
 
 One home holds Spex's durable core data and the sessions shared by desktop and CLI.

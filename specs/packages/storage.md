@@ -5,7 +5,7 @@
 
 ## Intent
 
-This package proposes Spex-owned file encodings, project binding, migration and offline Git selection under [DR-045](../decisions/045-unified-session-storage.md).
+This package defines Spex-owned file encodings, project binding, migration and offline Git selection under [DR-045](../decisions/045-unified-session-storage.md).
 Playbook owns the session bundle and its recovery rules [[1]]; this package treats that bundle as one selection unit.
 
 ## External Behavior
