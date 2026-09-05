@@ -479,6 +479,10 @@ test("CORE-22: records, order, and usage survive a service restart", async () =>
   await client.waitFor(
     (m) => m.type === "record" && m.record.type === "turn_finished",
   );
+  await client.waitFor(
+    (m) => m.type === "session.state" && m.session.id === session.id &&
+      m.session.turns === 1 && m.session.turnActive === false,
+  );
 
   const before = await client.expectOk("history.get", {
     sessionId: session.id,
@@ -486,9 +490,17 @@ test("CORE-22: records, order, and usage survive a service restart", async () =>
   const usageBefore = await client.expectOk("usage.get", {
     sessionId: session.id,
   });
+  const shutdownRecords: StoredRecord[] = [];
+  harness.service.events.onRecord = ({ seq, record, role, hidden }) => {
+    if (!hidden) shutdownRecords.push({ seq, record, ...(role === undefined ? {} : { role }) });
+  };
   client.close();
   // Stop WITHOUT disposing gracefully first: session is live at shutdown.
   await harness.service.stop();
+  assert.ok(shutdownRecords.some(({ record }) =>
+    record.type === "captain_telemetry" && record.topic === "playbook.trace" &&
+    (record.payload as { type?: string }).type === "session.disposed",
+  ), "shutdown delivers the Captain's disposal trace before closing");
 
   const restarted = await CoreService.start({
     token: "test",
@@ -511,7 +523,7 @@ test("CORE-22: records, order, and usage survive a service restart", async () =>
   });
   // Content and order, whole (core-service-22): payloads, roles, and
   // timestamps replay byte-identical, not just seq and type.
-  assert.deepEqual(after.records, before.records);
+  assert.deepEqual(after.records, [...before.records, ...shutdownRecords]);
   assert.deepEqual(
     await client2.expectOk("usage.get", { sessionId: session.id }),
     usageBefore,

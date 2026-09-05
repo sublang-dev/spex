@@ -88,8 +88,9 @@ test("end-to-end turn produces ordered persisted records with visibility flags",
     (error: CoreError) => error.code === "busy",
   );
 
-  // Wait for the turn to complete via the turn_finished record.
+  // The terminal record precedes the shared lifecycle's durable settlement.
   await waitFor(() => records.some((r) => r.record.type === "turn_finished"));
+  await manager.getLive(info.id)?.operation;
 
   const types = records.map((r) => r.record.type);
   assert.ok(types.indexOf("turn_started") < types.indexOf("captain_status"));
@@ -112,7 +113,11 @@ test("end-to-end turn produces ordered persisted records with visibility flags",
   const storedVisible = store.getRecords(info.id);
   const storedAll = store.getRecords(info.id, { includeHidden: true });
   assert.ok(storedAll.some((entry) => (entry.record as { type?: unknown }).type === "session_context"));
-  assert.equal(storedAll.filter((entry) => (entry.record as { type?: unknown }).type !== "session_context").length, records.length);
+  const observed = records.map(({ seq, record, role }) => ({
+    seq, record, ...(role === undefined ? {} : { role }),
+  }));
+  assert.deepEqual(storedAll, observed, "every stored record, including context, is delivered once in order");
+  assert.deepEqual(storedVisible, observed.filter((_, index) => !records[index]!.hidden));
   assert.ok(storedVisible.length < storedAll.length);
 
   const usage = store.sessionUsage(info.id);
@@ -162,6 +167,7 @@ test("an errored hidden captain result surfaces a visible failure record", async
   const info = await manager.createSession(project, composed);
   manager.submitTurn(info.id, "how are you doing?");
   await waitFor(() => records.some((r) => r.record.type === "turn_finished"));
+  await manager.getLive(info.id)?.operation;
 
   const failure = records.find((r) => r.record.type === "runtime_error");
   assert.ok(failure, "a visible runtime_error must be synthesized");
@@ -203,6 +209,7 @@ test("core-service-35: session state broadcasts carry the live summary", async (
 
   manager.submitTurn(info.id, "harden the session refresh");
   await waitFor(() => records.some((r) => r.record.type === "turn_finished"));
+  await manager.getLive(info.id)?.operation;
   // The name arrives with the turn that starts, not the one that ends:
   // a running session must never be listed as having said nothing.
   assert.ok(
@@ -267,6 +274,7 @@ test("DR-032: a shared lane's records carry the role each call served", async ()
   const info = await manager.createSession(project, composed);
   manager.submitTurn(info.id, "fix the bug");
   await waitFor(() => records.some((r) => r.record.type === "turn_finished"));
+  await manager.getLive(info.id)?.operation;
 
   const prompts = records.filter((r) => r.record.type === "player_prompt");
   assert.deepEqual(
