@@ -84,6 +84,7 @@ test("run-view-98: the first task runs, queues, and ends", async ({ page, app })
     /tighten the expiry tests/i,
   );
   await tab.click();
+  await expect(box).toHaveAttribute("placeholder", "Message the Captain…");
 
   // Ending: the inline confirm says a message can continue it, then
   // the notice reads the paused conversation above the composer,
