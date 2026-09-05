@@ -7,11 +7,11 @@
 // type is imported type-only from cligent and erased at build time.
 
 import { z } from "zod";
-import type { TmuxPlayRecord } from "@sublang/cligent/tmux-play";
+import type { TmuxPlayRecord as RuntimeRecord } from "@sublang/cligent/tmux-play";
 
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
-export type { TmuxPlayRecord };
+export type TmuxPlayRecord = RuntimeRecord & {contextSeq?: number};
 
 /** The v1 stream also carries opaque objects. This header gates only
  * presentation, never whether a stored envelope is valid. */
@@ -162,19 +162,19 @@ export interface SessionInfo {
   projectPath: string;
   createdAt: number;
   live: boolean;
+  /** Includes checkpoint settlement after the runtime finishes. */
+  turnActive?: boolean;
   endedAt: number | null;
   /** The session's bound player roster, in config order (DR-032). */
   players: { id: string; adapter: AdapterName; model?: string; fastMode?: boolean }[];
   /** Panes visible at session start, before any player_view_changed record. */
   initialVisible: string[];
-  /** Set on a session another host wrote into the shared session
-   * store: served here, never continued; deletable behind a lease
-   * check (DR-036, DR-042). */
+  /** Legacy host label retained for older history; never recovery authority. */
   foreign?: true;
-  /** Set on an ended session a Boss message can continue: not
-   * foreign, whole stream, a Captain snapshot in its sidecar
-   * (DR-042). */
+  /** Shared validation permits an ordinary Boss message to continue it. */
   continuable?: boolean;
+  continuationReason?: string;
+  recovery?: { state: "uncertain"; input: string };
   /** The session's own words: its first Boss turn, absent when the
    * session held no turn (core-service-32). */
   title?: string;
@@ -477,7 +477,11 @@ export const commandSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("session.list"), id }),
   z.object({ type: z.literal("session.create"), id, projectId: z.string().min(1) }),
+  z.object({ type: z.literal("project.rebind"), id, projectId: z.string().uuid(), path: z.string().min(1), aliases: z.array(z.string()).optional(), revision: z.string().min(1).optional() }).strict(),
+  z.object({ type: z.literal("storage.diagnostics"), id }).strict(),
   z.object({ type: z.literal("session.dispose"), id, sessionId: z.string().min(1) }),
+  z.object({ type: z.literal("session.retry"), id, sessionId: z.string().min(1) }).strict(),
+  z.object({ type: z.literal("session.discard"), id, sessionId: z.string().min(1) }).strict(),
   z.object({
     type: z.literal("turn.submit"),
     id,
@@ -624,6 +628,8 @@ export interface CommandResults {
   "config.get": ConfigState;
   "readiness.get": ReadinessEntry[];
   "project.list": ProjectInfo[];
+  "project.rebind": ProjectInfo;
+  "storage.diagnostics": { file: string; reason: string; blocking: boolean }[];
   "project.register": ProjectInfo;
   "project.remove": null;
   "project.create": ProjectInfo;
@@ -632,6 +638,8 @@ export interface CommandResults {
   "session.list": SessionInfo[];
   "session.create": SessionInfo;
   "session.dispose": null;
+  "session.retry": { accepted: true };
+  "session.discard": { removed: boolean };
   "session.delete": null;
   "turn.submit": { accepted: true };
   "turn.abort": { aborted: boolean };
@@ -823,6 +831,11 @@ export interface SessionRemovedMessage {
   projectId: string;
 }
 
+export interface SessionHistoryReplacedMessage {
+  type: "session.history-replaced";
+  sessionId: string;
+}
+
 export interface SessionStateMessage {
   type: "session.state";
   session: SessionInfo;
@@ -851,6 +864,7 @@ export type ServerMessage =
   | ReadinessStateMessage
   | SessionStateMessage
   | SessionRemovedMessage
+  | SessionHistoryReplacedMessage
   | CompileProgressMessage
   | IntentsChangedMessage;
 

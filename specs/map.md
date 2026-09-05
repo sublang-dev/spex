@@ -70,6 +70,7 @@ meta.md       The spec of specs
 | [DR-044](decisions/044-no-money-in-the-interface.md) | 044-no-money-in-the-interface.md | No money in the interface: the usage line reports tokens only; a recorded cost is never rendered |
 | [DR-045](decisions/045-unified-session-storage.md) | 045-unified-session-storage.md | Shared desktop/CLI storage: one Spex home, portable history/graphs, local provider hints, Git with whole-session choices |
 | [DR-047](decisions/047-explicit-session-recovery.md) | 047-explicit-session-recovery.md | Explicit desktop Retry/Discard through shared uncertain-turn recovery |
+| [DR-048](decisions/048-failed-session-cleanup.md) | 048-failed-session-cleanup.md | Failed cleanup retains session ownership and project reservation |
 | [DR-046](decisions/046-decision-record-evolution.md) | 046-decision-record-evolution.md | Accepted-decision evolution: successor DRs, scoped reciprocal links, current spec items updated on acceptance |
 | [DR-037](decisions/037-playbook-12-adoption.md) | 037-playbook-12-adoption.md | Playbook 12 adoption: floor ^12.2 (with slc 0.7) / cligent ^0.24, host capabilities from the shipped builder with an in-memory effect ledger, installed template and `dev` built-in, one-time config relocation, journal-listed history |
 | [DR-038](decisions/038-history-is-done-work.md) | 038-history-is-done-work.md | History is done work: finished records as history seeds, removal without trace, verdict grammar, the project Overview tab, session deletion, the fast-mode mark |

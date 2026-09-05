@@ -43,8 +43,8 @@ export interface UsageTotals {
 /**
  * Strip provider resume tokens from a record before it is served or
  * persisted (DR-036): the playbook store classifies resume tokens as
- * opaque credentials for backend conversations, and the session
- * manifest is their only durable home — the record stream is a
+ * opaque credentials for backend conversations, and the local
+ * hints file is their only Spex-managed home — the record stream is a
  * token-free replay projection. Tokens ride as `resumeToken` fields
  * (player/captain results, playbook.trace payloads) and as the
  * string-valued `resume` selection in trace payloads; `resume: false`

@@ -113,6 +113,43 @@ test("unknown session versions stay local and cannot enter a selected portable t
   rmSync(home, { recursive: true, force: true });
 });
 
+test("Git validation and core reopening agree on selected dispatch boundaries", async () => {
+  const {home,project,sessionId} = setup();
+  const intentId = randomUUID();
+  const manifestPath = join(home,"sessions",`${sessionId}.json`);
+  const streamPath = join(home,"sessions",`${sessionId}.records.jsonl`);
+  const log = join(home,"intents",`${project.id}.jsonl`);
+  const other = new ApplicationRegistry(home).register(join(home,"other"),"Other",2);
+  const bundle = (cwd: string) => {
+    const records = JSON.stringify({v:1,seq:1,record:{type:"turn_started",timestamp:1,turnId:1,turn:{id:1,prompt:"Work"}}}) + "\n";
+    const manifest = JSON.parse(readFileSync(manifestPath,"utf8"));
+    writeFileSync(streamPath,records);
+    writeFileSync(manifestPath,JSON.stringify({...manifest,cwd,replay:{seq:1,sha256:sha256(records),incomplete:false}}));
+  };
+  const dispatch = (turnId: number) => writeFileSync(log,[
+    {v:1,act:"queue",intent:{id:intentId,projectId:project.id,text:"Work",rank:"a",createdAt:1}},
+    {v:1,act:"dispatch",id:intentId,sessionId,turnId,at:1},
+  ].map((act) => JSON.stringify(act)).join("\n") + "\n");
+  const verify = async (valid: boolean) => {
+    const before = readFileSync(log);
+    if (valid) await validateStorageTree(home);
+    else await assert.rejects(() => validateStorageTree(home),/invalid dispatch/);
+    const store = new Store({dir:home});
+    try {
+      await store.initializeSessions();
+      if (valid) store.assertWritable();
+      else assert.throws(() => store.assertWritable(),/invalid dispatch/);
+    } finally {store.close();}
+    assert.deepEqual(readFileSync(log),before);
+  };
+  try {
+    bundle(project.path); dispatch(1); await verify(true);
+    dispatch(2); await verify(false);
+    bundle(other.path); dispatch(1); await verify(false);
+    rmSync(manifestPath); rmSync(streamPath); await verify(true);
+  } finally {rmSync(home,{recursive:true,force:true});}
+});
+
 
 test("the rebind command restores a Git ancestor's identity and recorded-path history", async () => {
   const { home, project, sessionId, commit } = setup();

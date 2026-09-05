@@ -1,732 +1,237 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 SubLang International <https://sublang.ai>
 
-// Session manager (DR-003, CORE-4..8): one embedded cligent runtime
-// per project session, the Playbook Captain shell as captain (with an
-// injected module loader per CORE-17), and a record bus that persists
-// every record and reports it upward with its visibility flag so the
-// server can filter at the channel boundary (CORE-14). An ended
-// session continues (DR-042): the shell's token-free snapshot, kept
-// in the sidecar at each turn's end, restores into a fresh shell and
-// a new runtime on the same session id.
-
 import { randomUUID } from "node:crypto";
-import { createTmuxPlayRuntime } from "@sublang/cligent/tmux-play";
-import type {
-  Captain,
-  CaptainSession,
-  PlayerAdapterImports,
-  TmuxPlayRecord,
-  TmuxPlayRuntime,
-} from "@sublang/cligent/tmux-play";
-import type { PlaybookEffectLedger } from "@sublang/playbook/runtime";
-
-import { PLAYBOOK_CAPTAIN_MODULE, type ComposedConfig, type LoadModule } from "./config.js";
-import type { ProjectInfo, SessionInfo } from "./protocol.js";
-import { Store, type CaptainSnapshot } from "./store.js";
-import { foldUsage, sanitizeRecord } from "./stream-fold.js";
-import { createHostEffects, type HostEffects } from "./host-capabilities.js";
+import { createTmuxPlayRuntime, type Captain, type PlayerAdapterImports } from "@sublang/cligent/tmux-play";
+import { openSessionHost, discardSessionUncertain, type SessionHostController } from "@sublang/playbook/session-host";
+import { validateCaptainSessionExecutionProjection, type SessionExecutionProjection, type ReplayStreamEntry } from "@sublang/playbook/session-store";
+import { resolveArtifacts } from "./artifacts.js";
+import type { ComposedConfig, LoadModule } from "./config.js";
+import type { ProjectInfo, SessionInfo, TmuxPlayRecord } from "./protocol.js";
+import { Store } from "./store.js";
 
 export class CoreError extends Error {
-  constructor(
-    readonly code:
-      | "not_found"
-      | "busy"
-      | "aborted"
-      | "conflict"
-      | "invalid_config"
-      | "invalid_request"
-      | "internal",
-    message: string,
-  ) {
+  constructor(readonly code: "not_found" | "busy" | "aborted" | "conflict" | "invalid_config" | "invalid_request" | "internal", message: string) {
     super(message);
     this.name = "CoreError";
   }
 }
 
-export type CaptainFactory = (
-  composed: ComposedConfig,
-) => Promise<Captain>;
-
+/** Deterministic record fixtures; production uses Playbook's Captain shell. */
+export type CaptainFactory = (composed: ComposedConfig) => Promise<Captain>;
 export interface SessionManagerOptions {
   store: Store;
-  /** Module loader injected into the captain shell (CORE-17). */
   loadModule?: LoadModule;
-  /** Test injection: replaces real agent adapters (CORE-18). */
   adapterImports?: PlayerAdapterImports;
-  /** Test injection: replaces the Playbook Captain shell. */
   captainFactory?: CaptainFactory;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
 }
-
 export interface RecordEnvelope {
   sessionId: string;
   seq: number;
   record: TmuxPlayRecord;
   hidden: boolean;
-  /** The role a player record's call served (DR-032). */
   role?: string;
 }
-
-/** One player call the trace opened and has not yet closed, keyed by
- * the lane it runs on. v8 rejects simultaneous calls resolving to one
- * player, so a lane holds at most one — the bracket is unambiguous by
- * construction (DR-032). */
-type OpenCalls = Map<string, string>;
-
 interface LiveSession {
   info: SessionInfo;
-  runtime: TmuxPlayRuntime;
-  /** The Captain itself — the shell whose snapshot the sidecar keeps
-   * (DR-042), not the restore wrapper the runtime was handed. */
-  captain: Captain;
+  controller: SessionHostController;
+  runtime: SessionHostController["host"];
   seq: number;
-  /** A continued session's runtime numbers turns from one again; its
-   * ids shift past the stored turns before anything sees them
-   * (DR-042). Zero for a fresh session. */
-  turnOffset: number;
   turnActive: boolean;
-  openCalls: OpenCalls;
-  /** The staged intent the next started turn dispatches (DR-035):
-   * held from submission, stamped at turn_started, and never stamped
-   * by a submission that starts no turn. */
   pendingIntentId?: string;
-  /** The host facilities the real shell runs on (DR-037): absent
-   * under an injected captain. */
-  effects?: HostEffects;
-  /** Surfaces a failure before a turn as the runtime would have. */
-  emitError?: (message: string) => void;
+  operation?: Promise<void>;
 }
 
-/** Resolves the role a player record's call is serving, by folding the
- * same trace the machine cards fold (DR-032). A `player.call.started`
- * opens its lane, the matching finish closes it, and every player
- * record in between belongs to that call's role. A trace that names no
- * resolved player invents nothing: the lane simply stays unlabelled. */
-function trackCallBrackets(open: OpenCalls, record: TmuxPlayRecord): void {
-  if (record.type !== "captain_telemetry") return;
-  const telemetry = record as { topic: string; payload?: unknown };
-  if (telemetry.topic !== "playbook.trace") return;
-  const event = telemetry.payload as {
-    type?: string;
-    payload?: { roleId?: string; playerId?: string };
-  };
-  const playerId = event?.payload?.playerId;
-  if (typeof playerId !== "string" || playerId.length === 0) return;
-  if (event.type === "player.call.started") {
-    const roleId = event.payload?.roleId;
-    if (typeof roleId === "string" && roleId.length > 0) {
-      open.set(playerId, roleId);
-    }
-  } else if (event.type === "player.call.finished") {
-    open.delete(playerId);
-  }
-}
-
-/** The role to stamp on this record, if it belongs to an open call. */
-function roleFor(open: OpenCalls, record: TmuxPlayRecord): string | undefined {
-  if (
-    record.type !== "player_prompt" &&
-    record.type !== "player_event" &&
-    record.type !== "player_finished"
-  ) {
-    return undefined;
-  }
-  return open.get((record as { playerId: string }).playerId);
-}
-
-function isHidden(record: TmuxPlayRecord): boolean {
-  return (
-    "visibility" in record &&
-    (record as { visibility?: string }).visibility === "hidden"
-  );
-}
-
-/** A record's turn ids shifted past a continued session's stored
- * turns (DR-042): the top-level id every record carries, and the
- * turn a start record opens. */
-function offsetTurnIds(record: TmuxPlayRecord, offset: number): TmuxPlayRecord {
-  if (offset === 0) return record;
-  const out = { ...record } as Record<string, unknown>;
-  if (typeof out.turnId === "number") out.turnId = out.turnId + offset;
-  if (record.type === "turn_started") {
-    const turn = (record as { turn: { id: number } }).turn;
-    out.turn = { ...turn, id: turn.id + offset };
-  }
-  return out as unknown as TmuxPlayRecord;
-}
-
-/** The durable Captain shell's surface beyond cligent's contract
- * (DR-042), duck-typed: the playbook shell exports and restores its
- * snapshot; an injected test captain need not. */
-interface SnapshotCaptain extends Captain {
-  exportSnapshot(): unknown;
-  restore(session: CaptainSession, snapshot: unknown): Promise<void>;
-}
-
-function asSnapshotCaptain(captain: Captain): SnapshotCaptain | undefined {
-  const candidate = captain as Partial<SnapshotCaptain>;
-  return typeof candidate.exportSnapshot === "function" &&
-    typeof candidate.restore === "function"
-    ? (captain as SnapshotCaptain)
-    : undefined;
-}
-
-/**
- * The shell snapshot with every provider token gone (DR-042): tokens
- * are machine-local and never reach a file. The Captain's conversation
- * becomes one to reseed from the journal digest on its first call —
- * unopened only while the history is empty — and every player starts
- * a new conversation, so the frames' role tokens go with the players'.
- */
-function stripSnapshotTokens(exported: unknown): unknown {
-  const snapshot = exported as {
-    captain: { conversation: { kind: string } };
-    playerSessions: Record<string, { resumeToken?: string }>;
-    frames?: { runtime: { roleResumeTokens: Record<string, string> } }[];
-    sequences: { turn: number };
-    journal: unknown[];
-  };
-  const emptyHistory = snapshot.sequences.turn === 0 && snapshot.journal.length === 0;
-  const playerSessions = Object.fromEntries(
-    Object.entries(snapshot.playerSessions).map(([playerId, entry]) => {
-      const { resumeToken: _token, ...kept } = entry;
-      return [playerId, kept];
-    }),
-  );
-  return {
-    ...snapshot,
-    captain: {
-      ...snapshot.captain,
-      conversation: { kind: emptyHistory ? "unopened" : "needsSeeding" },
-    },
-    playerSessions,
-    ...(snapshot.frames
-      ? {
-          frames: snapshot.frames.map((frame) => ({
-            ...frame,
-            runtime: { ...frame.runtime, roleResumeTokens: {} },
-          })),
-        }
-      : {}),
-  };
-}
-
-/**
- * A fresh shell entering through the runtime's one init boundary as a
- * restore instead (DR-042), the way the playbook CLI continues its own
- * sessions: the shell receives restore, never init. A rejected restore
- * is remembered so the caller can name it as the cause.
- */
-function restoringCaptain(
-  shell: SnapshotCaptain,
-  snapshot: unknown,
-  rejected: { error?: unknown },
-): Captain {
-  return {
-    async init(session) {
-      try {
-        await shell.restore(session, snapshot);
-      } catch (error) {
-        rejected.error = error;
-        throw error;
-      }
-    },
-    handleBossTurn: (turn, context) => shell.handleBossTurn(turn, context),
-    async prepareDispose() {
-      await shell.prepareDispose?.();
-    },
-    async dispose() {
-      await shell.dispose?.();
-    },
-  };
-}
-
-/** Per-session captain options (DR-014): playbooks that take a `cwd`
- * option the config leaves unset run their script gears in the
- * session's project directory instead of the app process cwd. */
-function withProjectCwd(
-  composed: ComposedConfig,
-  projectPath: string,
-): ComposedConfig {
-  const injectable = composed.playbooks.filter((p) => p.acceptsCwdOption);
-  if (injectable.length === 0) return composed;
-  const playbooks = { ...composed.captainOptions.playbooks };
-  for (const playbook of injectable) {
-    const block = playbooks[playbook.id];
-    if (!block) continue;
-    playbooks[playbook.id] = {
-      ...block,
-      options: { ...block.options, cwd: projectPath },
-    };
-  }
-  return {
-    ...composed,
-    captainOptions: { ...composed.captainOptions, playbooks },
-  };
-}
-
-async function defaultCaptainFactory(
-  composed: ComposedConfig,
-  loadModule: LoadModule,
-  effects: HostEffects,
-): Promise<Captain> {
-  const moduleValue = (await loadModule(PLAYBOOK_CAPTAIN_MODULE)) as {
-    default?: unknown;
-  };
-  const factory = moduleValue?.default;
-  if (typeof factory !== "function") {
-    throw new CoreError(
-      "internal",
-      `Captain module ${PLAYBOOK_CAPTAIN_MODULE} must export a default factory`,
-    );
-  }
-  return (
-    factory as (
-      options: unknown,
-      deps?: {
-        loadModule?: LoadModule;
-        hostCapabilities?: HostEffects["capabilities"];
-        unresolvedEffectSettlement?: HostEffects["settlement"];
-      },
-    ) => Captain
-  )(composed.captainOptions, {
-    loadModule,
-    hostCapabilities: effects.capabilities,
-    unresolvedEffectSettlement: effects.settlement,
+/** Construct the shared execution projection from the validated desktop config. */
+function executionConfig(composed: ComposedConfig, cwd: string): SessionExecutionProjection {
+  return validateCaptainSessionExecutionProjection({
+    schemaVersion: 2,
+    captain: composed.captainOptions.sessionAgents.captain,
+    players: composed.players.map(({id}) => ({ id, ...composed.captainOptions.sessionAgents.players[id] })),
+    catalog: Object.fromEntries(composed.playbooks.map((playbook) => {
+      const block = composed.captainOptions.playbooks[playbook.id];
+      return [playbook.id, {
+        id: playbook.id, from: playbook.from,
+        manifestCommand: playbook.manifestCommand,
+        command: playbook.command, intent: playbook.intent,
+        artifactSchema: playbook.artifactSchema,
+        requiredRoleIds: playbook.requiredRoleIds,
+        concurrentRoleSets: playbook.concurrentRoleSets,
+        roles: block.roles,
+        options: { ...block.options, ...(playbook.acceptsCwdOption ? {cwd} : {}) },
+      }];
+    })),
   });
 }
 
 export class SessionManager {
   private readonly store: Store;
   private readonly loadModule: LoadModule;
-  private readonly env: NodeJS.ProcessEnv;
-  private readonly adapterImports?: PlayerAdapterImports;
-  private readonly captainFactory?: CaptainFactory;
-  private readonly now: () => number;
   private readonly live = new Map<string, LiveSession>();
-  private readonly liveByProject = new Map<string, string>();
-  /** Projects with a session start in flight: the one-live-session
-   * rule holds across the await, not only after it. */
   private readonly opening = new Set<string>();
-
+  private readonly recovering = new Set<string>();
+  private readonly now: () => number;
   onRecord: (envelope: RecordEnvelope) => void = () => {};
   onSessionState: (session: SessionInfo) => void = () => {};
-  /** A session event moved ledger-derived state (DR-035): the fold's
-   * consumers re-pull. Fired per project, debounced by the service. */
   onLedgerChange: (projectId: string) => void = () => {};
 
-  constructor(options: SessionManagerOptions) {
+  constructor(private readonly options: SessionManagerOptions) {
     this.store = options.store;
     this.loadModule = options.loadModule ?? ((specifier) => import(specifier));
-    this.env = options.env ?? process.env;
-    this.adapterImports = options.adapterImports;
-    this.captainFactory = options.captainFactory;
     this.now = options.now ?? Date.now;
   }
 
   listSessions(): SessionInfo[] {
-    return this.store.listSessions().map((session) => ({
-      ...session,
-      live: this.live.has(session.id),
-    }));
+    return this.store.listSessions().map((session) => {
+      const live = this.live.get(session.id);
+      return {...session, live: !!live, turnActive: live?.turnActive ?? false};
+    });
   }
-
-  /** The live lanes as the ledger fold consumes them (DR-035). */
   listLanes(): { sessionId: string; projectId: string; turnActive: boolean }[] {
-    return [...this.live.values()].map((entry) => ({
-      sessionId: entry.info.id,
-      projectId: entry.info.projectId,
-      turnActive: entry.turnActive,
-    }));
+    return [...this.live.values()].map(({info,turnActive}) => ({sessionId: info.id, projectId: info.projectId, turnActive}));
+  }
+  getLive(sessionId: string): LiveSession | undefined { return this.live.get(sessionId); }
+
+  async createSession(project: ProjectInfo, composed: ComposedConfig): Promise<SessionInfo> {
+    return this.open(project, composed, randomUUID(), "new");
+  }
+  async continueSession(project: ProjectInfo, composed: ComposedConfig, session: SessionInfo): Promise<SessionInfo> {
+    return this.open(project, composed, session.id, "continue");
+  }
+  async retrySession(project: ProjectInfo, sessionId: string): Promise<void> {
+    await this.open(project, undefined, sessionId, "retry");
+    this.startTurn(this.requireLive(sessionId), undefined, true);
+  }
+  async discardSession(sessionId: string): Promise<{removed: boolean}> {
+    if (this.live.has(sessionId) || this.recovering.has(sessionId)) throw new CoreError("busy", "the session is active");
+    const info = this.store.describeSession(sessionId);
+    if (!info) throw new CoreError("not_found", `no session ${sessionId}`);
+    this.recovering.add(sessionId);
+    try {
+      const restored = await discardSessionUncertain(this.store.sessionStore(), sessionId);
+      if (!restored) this.store.forgetSession(sessionId);
+      else { await this.store.refreshSession(sessionId, false); this.publish(sessionId); }
+      this.onLedgerChange(info.projectId);
+      return {removed: !restored};
+    } catch (error) { throw this.failure(error); }
+    finally { this.recovering.delete(sessionId); }
   }
 
-  getLive(sessionId: string): LiveSession | undefined {
-    return this.live.get(sessionId);
-  }
-
-  async createSession(
-    project: ProjectInfo,
-    composed: ComposedConfig,
-  ): Promise<SessionInfo> {
-    return this.start(project, composed);
-  }
-
-  /**
-   * Continue an ended session on its own id (DR-042, core-service-73):
-   * the sidecar's snapshot restores into a fresh shell behind a new
-   * runtime, the effect ledger seeded from it, turn ids offset past the
-   * stored turns, and the session live again. The caller has checked
-   * the session is continuable; the one-live-session-per-project rule
-   * and a snapshot the current config no longer matches refuse here.
-   */
-  async continueSession(
-    project: ProjectInfo,
-    composed: ComposedConfig,
-    session: SessionInfo,
-    snapshot: CaptainSnapshot,
-  ): Promise<SessionInfo> {
-    return this.start(project, composed, { session, snapshot });
-  }
-
-  private async start(
-    project: ProjectInfo,
-    composed: ComposedConfig,
-    resume?: { session: SessionInfo; snapshot: CaptainSnapshot },
-  ): Promise<SessionInfo> {
-    if (this.liveByProject.has(project.id) || this.opening.has(project.id)) {
-      throw new CoreError(
-        resume ? "busy" : "conflict",
-        resume
-          ? `another session in ${project.name} is live — end it to continue this one`
-          : `project ${project.path} already has a live session`,
-      );
+  private async open(project: ProjectInfo, composed: ComposedConfig | undefined, sessionId: string, mode: "new" | "continue" | "retry"): Promise<SessionInfo> {
+    if (this.opening.has(project.id) || [...this.live.values()].some((entry) => entry.info.projectId === project.id) || this.recovering.has(sessionId)) {
+      throw new CoreError("busy", `end the active session in ${project.name} first`);
     }
     this.opening.add(project.id);
+    let entry: LiveSession | undefined;
+    let controller: SessionHostController | undefined;
     try {
-      return await this.open(project, composed, resume);
-    } finally {
-      this.opening.delete(project.id);
-    }
-  }
-
-  private async open(
-    project: ProjectInfo,
-    composed: ComposedConfig,
-    resume?: { session: SessionInfo; snapshot: CaptainSnapshot },
-  ): Promise<SessionInfo> {
-    const sessionComposed = withProjectCwd(composed, project.path);
-    const sessionId = resume?.session.id ?? randomUUID();
-    const shellSnapshot = resume?.snapshot.shell;
-    let captain: Captain;
-    let effects: HostEffects | undefined;
-    if (this.captainFactory) {
-      captain = await this.captainFactory(sessionComposed);
-    } else {
-      try {
-        effects = await createHostEffects({
-          cwd: project.path,
-          sessionId,
-          playbooks: sessionComposed.playbooks,
-          env: this.env,
-          // The shell accepts a restore only when the host ledger is
-          // the snapshot's (core-service-74).
-          ...(shellSnapshot !== undefined
-            ? {
-                ledger: (shellSnapshot as { effectLedger: PlaybookEffectLedger })
-                  .effectLedger,
-              }
-            : {}),
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new CoreError("invalid_config", `session failed to start: ${message}`);
-      }
-      captain = await defaultCaptainFactory(sessionComposed, this.loadModule, effects);
-    }
-    // The runtime's captain: the shell itself, or — continuing a
-    // session whose Captain carries state — a wrapper that restores
-    // the snapshot where the runtime would init (DR-042).
-    let runtimeCaptain = captain;
-    const rejectedRestore: { error?: unknown } = {};
-    if (shellSnapshot !== undefined) {
-      const shell = asSnapshotCaptain(captain);
-      if (!shell) {
-        throw new CoreError(
-          "invalid_config",
-          "this session's Captain cannot restore its snapshot — start a new session",
-        );
-      }
-      runtimeCaptain = restoringCaptain(shell, shellSnapshot, rejectedRestore);
-    }
-
-    const players = composed.players.map((player) => ({
-      id: player.id,
-      adapter: player.adapter,
-      ...(player.model !== undefined ? { model: player.model } : {}),
-      // The lane's fast mode rides to the pane label (DR-038).
-      ...(player.fastMode !== undefined ? { fastMode: player.fastMode } : {}),
-    }));
-    const info: SessionInfo = resume
-      ? { ...resume.session, live: true, endedAt: null, continuable: false, players }
-      : {
-          id: sessionId,
-          projectId: project.id,
-          projectPath: project.path,
-          createdAt: this.now(),
-          live: true,
-          endedAt: null,
-          players,
-          initialVisible: composed.initialVisible,
-          // A session begins with no conversation to summarize
-          // (core-service-32); the store fills these as it runs.
-          turns: 0,
-          failed: false,
-        };
-
-    const entry: LiveSession = {
-      info,
-      runtime: undefined as unknown as TmuxPlayRuntime,
-      captain,
-      // A continued session's records follow the stored ones
-      // (core-service-74): sequence and turn ids alike.
-      seq: resume ? this.store.maxSeq(sessionId) : 0,
-      turnOffset: resume ? this.store.maxTurnId(sessionId) : 0,
-      turnActive: false,
-      openCalls: new Map(),
-      ...(effects ? { effects } : {}),
-    };
-
-    const append = (rawRecord: TmuxPlayRecord): void => {
-      // One truth for live and replay: what subscribers see is what
-      // the stream persists, and neither carries resume tokens.
-      const record = offsetTurnIds(sanitizeRecord(rawRecord), entry.turnOffset);
-      entry.seq += 1;
-      const seq = entry.seq;
-      // A player record is stamped with the role whose call is open on
-      // its lane; the finish trace closes the bracket after the last
-      // record it covers, so the order here is stamp-then-track only
-      // for the trace itself (DR-032).
-      const role = roleFor(entry.openCalls, record);
-      trackCallBrackets(entry.openCalls, record);
-      this.store.appendRecord(info.id, seq, record, role);
-      this.trackRecord(info.id, record);
-      this.onRecord({
-        sessionId: info.id,
-        seq,
-        record,
-        hidden: isHidden(record),
-        ...(role !== undefined ? { role } : {}),
+      const config = composed ? executionConfig(composed, project.path) : undefined;
+      const graphs = composed ? await Promise.all(composed.playbooks.map(async (playbook) => ({
+        playbookId: playbook.id, graph: (await resolveArtifacts(playbook, this.options.env)).machine ?? null,
+      }))) : undefined;
+      const fixture = composed && this.options.captainFactory ? await this.options.captainFactory(composed) : undefined;
+      controller = await openSessionHost({
+        store: this.store.sessionStore(), sessionId, mode, cwd: project.path,
+        ...(config ? {config} : {}), loadModule: this.loadModule,
+        ...(graphs ? {graphs} : {}),
+        ...(composed ? {initialVisible: composed.initialVisible} : {}),
+        ...(this.options.adapterImports ? {adapterImports: this.options.adapterImports} : {}),
+        // Tests may narrate records before the real shell turn. Only the
+        // shell supplies the reply, journal and durable settlement.
+        ...(fixture ? {createHostRuntime: async (input: Parameters<typeof createTmuxPlayRuntime>[0]) => {
+          const shell = input.captain;
+          return createTmuxPlayRuntime({...input, captain: {
+            async init(session) { await shell.init?.(session); await fixture.init?.(session); },
+            async handleBossTurn(turn,context) {
+              await fixture.handleBossTurn(turn,{...context, emitReply: async () => {}});
+              await shell.handleBossTurn(turn,context);
+            },
+            async prepareDispose() { await fixture.prepareDispose?.(); await shell.prepareDispose?.(); },
+            async dispose() { await fixture.dispose?.(); await shell.dispose?.(); },
+          }});
+        }} : {}),
+        onStoredRecord: async (record) => {
+          this.record(sessionId, record, entry);
+          const result = record.record.type === "captain_finished" ? record.record.result as {status?: string; error?: string; finalText?: string} : undefined;
+          if (entry && result?.status === "error") await this.appendError(entry, `The Captain's turn failed: ${result.error ?? result.finalText ?? "unknown error"}`);
+        },
+        onCheckpoint: async () => {
+          await this.store.refreshSession(sessionId, true);
+          if (entry) this.publish(sessionId);
+        },
       });
-    };
-    entry.emitError = (message: string): void =>
-      append({
-        type: "runtime_error",
-        turnId: null,
-        timestamp: this.now(),
-        message,
-      } as TmuxPlayRecord);
-    const observer = {
-      onRecord: (record: TmuxPlayRecord): void => {
-        append(record);
-        // A captain turn that ends in error carries its cause on a
-        // hidden record only; the polite reply never names it. The
-        // cause must land visibly (core-service-30, DR-010 §5) —
-        // synthesized here so every session subscriber and the
-        // Dashboard's failure derivation see the same record.
-        if (record.type === "captain_finished" && isHidden(record)) {
-          const result = (record as {
-            result?: { status?: string; error?: string; finalText?: string };
-          }).result;
-          if (result?.status === "error") {
-            const cause = result.error ?? result.finalText ?? "unknown error";
-            append({
-              type: "runtime_error",
-              turnId: (record as { turnId: number | null }).turnId,
-              timestamp: this.now(),
-              message: `The Captain's turn failed: ${cause}`,
-              sourceRecordType: "captain_finished",
-            } as TmuxPlayRecord);
-          }
-        }
-      },
-    };
-
-    try {
-      // Spex validates agents against its own launcher-parity rules
-      // (adapter set, effort names), so the composed shapes satisfy
-      // cligent's per-adapter discriminated config union; the casts
-      // bridge the union without widening what cligent checks at
-      // runtime.
-      entry.runtime = await createTmuxPlayRuntime({
-        captain: runtimeCaptain,
-        captainConfig:
-          composed.captainAgent as Parameters<
-            typeof createTmuxPlayRuntime
-          >[0]["captainConfig"],
-        players: composed.players as unknown as Parameters<
-          typeof createTmuxPlayRuntime
-        >[0]["players"],
-        observers: [observer],
-        cwd: project.path,
-        ...(this.adapterImports ? { adapterImports: this.adapterImports } : {}),
-      });
+      await this.store.refreshSession(sessionId, true);
+      const info = this.store.describeSession(sessionId);
+      if (!info) throw new Error("shared session has no readable project history");
+      entry = {info, controller, runtime: controller.host, seq: this.store.maxSeq(sessionId), turnActive: false};
+      this.live.set(sessionId, entry);
+      this.publish(sessionId);
+      return {...info, live:true, turnActive:false};
     } catch (error) {
-      if (rejectedRestore.error !== undefined) {
-        // The shell refused the snapshot: the playbooks, players, or
-        // role bindings changed since, or the ledger disagrees. The
-        // session stays as it was, read-only, and a new one is the
-        // way forward (core-service-73).
-        const cause =
-          rejectedRestore.error instanceof Error
-            ? rejectedRestore.error.message
-            : String(rejectedRestore.error);
-        throw new CoreError(
-          "invalid_config",
-          `this session cannot continue under the current config (${cause}) — start a new session`,
-        );
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      throw new CoreError("invalid_config", `session failed to start: ${message}`);
-    }
-
-    if (resume) this.store.reopenSession(info.id, players);
-    else this.store.createSession(info);
-    this.live.set(info.id, entry);
-    this.liveByProject.set(project.id, info.id);
-    this.broadcastState(info.id, true, null, info);
-    return info;
+      if (controller) await controller.dispose();
+      throw this.failure(error, mode === "new" ? "invalid_config" : "invalid_request");
+    } finally { this.opening.delete(project.id); }
   }
 
-  /**
-   * Persist the Captain's settled state in the sidecar (DR-042,
-   * core-service-72): the shell's export with every token stripped. A
-   * shell that cannot export right now — mid-turn, or torn — keeps
-   * the last snapshot; a Captain that exports no state at all persists
-   * the empty snapshot, and continuation starts it fresh.
-   */
-  private persistSnapshot(entry: LiveSession): void {
-    const shell = asSnapshotCaptain(entry.captain);
-    let snapshot: CaptainSnapshot;
-    if (shell) {
-      let exported: unknown;
-      try {
-        exported = shell.exportSnapshot();
-      } catch {
-        return;
-      }
-      if (exported === undefined) return;
-      snapshot = { v: 1, shell: stripSnapshotTokens(exported) };
-    } else {
-      snapshot = { v: 1 };
+  private record(sessionId: string, entry: ReplayStreamEntry, live?: LiveSession): void {
+    if (entry.seq <= this.store.maxSeq(sessionId)) return;
+    const record = entry.record as unknown as TmuxPlayRecord;
+    this.store.appendRecord(sessionId, entry.seq, record, entry.role);
+    this.store.foldStoredRecord(sessionId, record);
+    if (live) live.seq = entry.seq;
+    if (record.type === "turn_started" && live?.pendingIntentId) {
+      const turn = (record as {turn: {id: number}}).turn;
+      this.store.stampIntentDispatch(live.pendingIntentId, sessionId, turn.id, record.timestamp);
+      live.pendingIntentId = undefined;
     }
-    try {
-      this.store.setSnapshot(entry.info.id, snapshot);
-    } catch (error) {
-      // Fail soft as the stream does (DR-036): a sidecar the disk
-      // refuses costs continuation, never the turn.
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`spex: session ${entry.info.id} snapshot write failed (${message})`);
+    this.onRecord({sessionId, seq: entry.seq, record, hidden: entry.record.visibility === "hidden", ...(entry.role ? {role:entry.role} : {})});
+    if (live) {
+      this.publish(sessionId);
+      this.onLedgerChange(live.info.projectId);
     }
   }
 
-  /** A turn just changed the session's summary — its title, count,
-   * failure marker and cost (core-service-34). */
-  private refreshLiveState(sessionId: string): void {
-    const entry = this.live.get(sessionId);
-    if (entry) this.broadcastState(sessionId, true, null, entry.info);
+  private async appendError(entry: LiveSession, message: string): Promise<void> {
+    const afterSeq = this.store.maxSeq(entry.info.id);
+    await entry.controller.lease.append({type:"runtime_error", turnId:null, timestamp:this.now(), message});
+    const added = await entry.controller.lease.readStream({afterSeq});
+    for (const item of added.entries) this.record(entry.info.id, item, entry);
   }
 
-  private trackRecord(sessionId: string, record: TmuxPlayRecord): void {
-    const entry = this.live.get(sessionId);
-    const ledgerChanged = (): void => {
-      if (entry) this.onLedgerChange(entry.info.projectId);
-    };
-    switch (record.type) {
-      case "turn_started": {
-        const turn = (record as { turn: { id: number; prompt: string } }).turn;
-        this.store.startTurn(sessionId, turn.id, turn.prompt, record.timestamp);
-        // The staged intent binds the moment its turn starts (DR-035);
-        // a submission the runtime never turned into a turn stamps
-        // nothing.
-        if (entry?.pendingIntentId !== undefined) {
-          this.store.stampIntentDispatch(
-            entry.pendingIntentId,
-            sessionId,
-            turn.id,
-            record.timestamp,
-          );
-          entry.pendingIntentId = undefined;
-        }
-        // A session earns its name the moment it is asked for something
-        // (core-service-32): waiting for the turn to end would leave the
-        // rail saying "no messages yet" about a session already at work.
-        this.refreshLiveState(sessionId);
-        ledgerChanged();
-        break;
-      }
-      case "turn_finished":
-        if (record.turnId !== null) {
-          this.store.endTurn(sessionId, record.turnId, "finished", record.timestamp);
-        }
-        this.refreshLiveState(sessionId);
-        ledgerChanged();
-        break;
-      case "turn_aborted":
-        if (record.turnId !== null) {
-          this.store.endTurn(sessionId, record.turnId, "aborted", record.timestamp);
-        }
-        this.refreshLiveState(sessionId);
-        ledgerChanged();
-        break;
-      case "runtime_error":
-      case "player_finished":
-        ledgerChanged();
-        break;
-      case "captain_telemetry":
-        if (
-          (record as { topic?: string }).topic === "playbook.fsm.state"
-        ) {
-          ledgerChanged();
-        }
-        break;
-      case "player_event":
-      case "captain_event": {
-        // One extraction shared with the store's restart fold
-        // (DR-036): live tracking and replay derive the same usage.
-        const usage = foldUsage(sessionId, record);
-        if (usage) this.store.addUsage(usage);
-        break;
-      }
-      default:
-        break;
-    }
-  }
-
-  /**
-   * Start a boss turn (CORE-5). Rejects with busy while a turn is
-   * active; otherwise resolves as soon as the turn is accepted. An
-   * `intentId` rides along staged (DR-035): the dispatch stamps only
-   * when the turn actually starts.
-   */
   submitTurn(sessionId: string, text: string, intentId?: string): void {
     const entry = this.requireLive(sessionId);
-    if (entry.turnActive) {
-      throw new CoreError(
-        "busy",
-        "a turn is already running in this session",
-      );
-    }
-    entry.turnActive = true;
+    if (entry.turnActive) throw new CoreError("busy", "a turn is already running in this session");
+    if (this.store.describeSession(sessionId)?.recovery) throw new CoreError("invalid_request", "Recover the interrupted turn with Retry or Discard first");
     entry.pendingIntentId = intentId;
-    void (async () => {
-      // As the CLI reconciles repository effects before each Boss
-      // input: a failure here is a failure before the turn, surfaced
-      // as the runtime would surface its own (DR-037).
+    this.startTurn(entry, text, false);
+  }
+
+  private startTurn(entry: LiveSession, text: string | undefined, retry: boolean): void {
+    entry.turnActive = true;
+    this.publish(entry.info.id);
+    entry.operation = (async () => {
+      let failed = false;
       try {
-        await entry.effects?.beginTurn();
+        if (retry) await entry.controller.retry();
+        else await entry.controller.handleBossTurn(text!);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        entry.emitError?.(`repository-effect reconciliation failed: ${message}`);
-        return;
-      }
-      try {
-        await entry.runtime.runBossTurn(text);
-      } catch {
-        // Failures surface as runtime_error / turn_aborted records.
-      }
-    })()
-      .finally(() => {
-        // The turn is over either way: what the Captain holds now is
-        // what a continuation restores (DR-042), so it lands before
-        // the next turn can start.
-        this.persistSnapshot(entry);
+        failed = true;
+        try { await this.appendError(entry, error instanceof Error ? error.message : String(error)); }
+        catch { /* The lifecycle retains incomplete evidence and ownership. */ }
+      } finally {
         entry.turnActive = false;
-        // A submission that never became a turn stamps nothing.
         entry.pendingIntentId = undefined;
+        if (failed) {
+          try { await entry.controller.dispose(); this.live.delete(entry.info.id); }
+          catch (error) { console.error(`spex: session cleanup failed; ownership retained: ${String(error)}`); }
+        }
+        await this.store.refreshSession(entry.info.id, this.live.has(entry.info.id));
+        this.publish(entry.info.id);
         this.onLedgerChange(entry.info.projectId);
-      });
+      }
+    })().catch((error) => console.error(`spex: session state refresh failed: ${String(error)}`));
   }
 
   abortTurn(sessionId: string): boolean {
@@ -735,75 +240,34 @@ export class SessionManager {
     entry.runtime.abortActiveTurn();
     return true;
   }
-
   async disposeSession(sessionId: string): Promise<void> {
     const entry = this.requireLive(sessionId);
-    // Disposal wipes the shell's memory, so its last settled state is
-    // taken first (DR-042): ending pauses the conversation.
-    this.persistSnapshot(entry);
-    // A runtime that failed to dispose is unusable either way, so the
-    // session ends regardless (CORE-4): holding its project would
-    // strand it until a restart. The failure still reaches the caller,
-    // reported after the session's end is recorded.
-    let failure: { error: unknown } | undefined;
-    try {
-      await entry.runtime.dispose();
-    } catch (error) {
-      failure = { error };
-    }
+    if (entry.turnActive) entry.runtime.abortActiveTurn();
+    await entry.operation;
+    await entry.controller.dispose();
     this.live.delete(sessionId);
-    this.liveByProject.delete(entry.info.projectId);
-    const endedAt = this.now();
-    this.store.endSession(sessionId, endedAt);
-    this.broadcastState(sessionId, false, endedAt, entry.info);
-    // A session's death releases its unfinished dispatch by
-    // derivation (DR-035): the fold's consumers re-pull.
+    await this.store.refreshSession(sessionId, false);
+    this.publish(sessionId);
     this.onLedgerChange(entry.info.projectId);
-    if (failure) throw failure.error;
   }
-
-  /** A session.state broadcast carries the conversation summary a
-   * listing would (core-service-34): the creation-time record holds
-   * zeros forever, and a client that replaces its entry with those
-   * would blank a row the reader is watching. */
-  private broadcastState(
-    sessionId: string,
-    live: boolean,
-    endedAt: number | null,
-    fallback: SessionInfo,
-  ): void {
-    const described = this.store.describeSession(sessionId);
-    this.onSessionState({ ...(described ?? fallback), live, endedAt });
-  }
-
-  /**
-   * Dispose every live session (CORE-39). One runtime's failure must
-   * not skip another's disposal — that would orphan its agent
-   * processes — so each is attempted and the failures are reported
-   * together once none is left.
-   */
   async disposeAll(): Promise<void> {
-    const failures: unknown[] = [];
-    for (const sessionId of [...this.live.keys()]) {
-      try {
-        await this.disposeSession(sessionId);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        `${failures.length} session runtime(s) failed to dispose`,
-      );
-    }
+    const results = await Promise.allSettled([...this.live.keys()].map((id) => this.disposeSession(id)));
+    const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
+    if (failures.length) throw new AggregateError(failures, "session cleanup failed");
   }
-
+  private publish(sessionId: string): void {
+    const session = this.store.describeSession(sessionId);
+    const entry = this.live.get(sessionId);
+    if (session) this.onSessionState({...session, live:!!entry, turnActive:entry?.turnActive ?? false});
+  }
   private requireLive(sessionId: string): LiveSession {
     const entry = this.live.get(sessionId);
-    if (!entry) {
-      throw new CoreError("not_found", `no live session ${sessionId}`);
-    }
+    if (!entry) throw new CoreError("not_found", `no live session ${sessionId}`);
     return entry;
+  }
+  private failure(error: unknown, fallback: CoreError["code"] = "invalid_request"): CoreError {
+    if (error instanceof CoreError) return error;
+    const message = error instanceof Error ? error.message : String(error);
+    return new CoreError(/lease|already active|already held|owned by/.test(message) ? "busy" : /structur|execution config|catalog.*(changed|mismatch)|players.*(changed|mismatch)/i.test(message) ? "invalid_config" : fallback, message);
   }
 }

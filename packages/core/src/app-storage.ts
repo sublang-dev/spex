@@ -133,7 +133,7 @@ export function validateIntentRelations(intents: Map<string, IntentInfo>, remove
     if (intent.closedAt === undefined) {
       const rank = `${intent.projectId}\0${intent.rank}`;
       need(!ranks.has(rank), file, `duplicate open rank ${intent.rank}`); ranks.add(rank);
-      if (intent.source) {
+      if (intent.source && intent.source.kind !== "chat") {
         const source = `${intent.projectId}\0${intent.source.kind}\0${intent.source.ref}`;
         need(!sources.has(source), file, `duplicate open source ${intent.source.ref}`); sources.add(source);
       }
@@ -144,6 +144,18 @@ export function validateIntentRelations(intents: Map<string, IntentInfo>, remove
       need(!seen.has(next), file, `dependency cycle at ${next}`); seen.add(next);
       next = intents.get(next)?.afterId;
     }
+  }
+}
+export function validateIntentDispatches(
+  intents: Map<string, IntentInfo>,
+  sessions: Map<string, {projectId?: string; turns: ReadonlySet<number>}>,
+): void {
+  for (const intent of intents.values()) {
+    if (!intent.dispatched) continue;
+    const session = sessions.get(intent.dispatched.sessionId);
+    if (!session) continue; // Deleted targets retain ledger derivation.
+    need((session.projectId === undefined || session.projectId === intent.projectId) && session.turns.has(intent.dispatched.turnId),
+      `intents/${intent.projectId}.jsonl`, `invalid dispatch for ${intent.id}`);
   }
 }
 export function readJsonFile(file: string): unknown {

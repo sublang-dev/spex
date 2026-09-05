@@ -54,6 +54,7 @@ import { CoreError, SessionManager, type CaptainFactory, type RecordEnvelope } f
 import { closedStats, foldLedger, intentTitle, wasWorked } from "./ledger.js";
 import { rankBetween } from "./rank.js";
 import { Store } from "./store.js";
+import { prepareStorageGitFiles } from "./storage-git.js";
 import {
   GitHubForgeAdapter,
   createProjectRepo,
@@ -70,6 +71,7 @@ import {
   type AgentBlock,
   type ConfigEditOp,
 } from "./config-edit.js";
+import { migrateManagedLibraryConfig } from "./config-migrate.js";
 import { resolveArtifacts } from "./artifacts.js";
 import { loadBuiltinCatalog } from "./builtins.js";
 import {
@@ -205,7 +207,7 @@ export class CoreService {
     this.env = options.env ?? process.env;
     this.home = options.home ?? this.env.HOME ?? homedir();
     this.configPath =
-      options.configPath ?? resolveConfigPath(this.env, this.home);
+      options.configPath ?? resolveConfigPath({...this.env, SPEX_HOME: options.dataDir ?? this.env.SPEX_HOME}, this.home);
     if (!options.loadModule) {
       this.options = { ...options, loadModule: createModuleLoader(this.env) };
     }
@@ -215,13 +217,13 @@ export class CoreService {
       options.forgeAdapter ?? new GitHubForgeAdapter(this.runCommand);
     this.store = new Store({
       ...(options.dataDir ? { dir: options.dataDir } : {}),
-      ...(options.sessionsDir ? { sessionsDir: options.sessionsDir } : {}),
+      sessionsDir: options.sessionsDir ?? resolveSessionsDir(this.configPath, { ...this.env, HOME: this.home, SPEX_HOME: options.dataDir ?? this.env.SPEX_HOME }),
       ...(options.legacyDbPath ? { legacyDbPath: options.legacyDbPath } : {}),
     });
     this.configState = { status: "missing", path: this.configPath };
     this.sessions = new SessionManager({
       store: this.store,
-      loadModule: options.loadModule,
+      loadModule: this.options.loadModule,
       adapterImports: options.adapterImports,
       captainFactory: options.captainFactory,
       env: this.env,
@@ -267,6 +269,7 @@ export class CoreService {
 
   static async start(options: CoreServiceOptions = {}): Promise<CoreService> {
     const service = new CoreService(options);
+    try {
     service.store.markAllSessionsNotLive();
     service.relocateLegacyLibrary();
     // The launcher moved the shared config under the Spex root
@@ -280,14 +283,22 @@ export class CoreService {
       );
     }
     service.seeded = seedConfig(service.configPath);
+    if (service.options.dataDir) migrateManagedLibraryConfig(service.configPath, service.libraryDir(), service.options.dataDir);
     await service.reloadConfig();
-    service.syncForeignSessions();
+    await service.store.initializeSessions(service.sessionsDir());
+    await service.syncForeignSessions();
+    service.store.validateStorage();
+    if (options.dataDir) prepareStorageGitFiles(options.dataDir, service.store.untrackedSessionPaths());
     if (options.watchConfig !== false) {
       service.watchConfigFile();
       service.watchSessionsDir();
     }
     await service.listen(options.port ?? 0);
     return service;
+    } catch (error) {
+      await service.stop();
+      throw error;
+    }
   }
 
   /**
@@ -298,11 +309,19 @@ export class CoreService {
    * sessions join the listing, keep their history current, and leave
    * it when removed.
    */
-  private syncForeignSessions(): void {
-    let changed: ReturnType<Store["adoptForeignSessions"]>;
+  private adoptScan: Promise<void> = Promise.resolve();
+
+  private syncForeignSessions(): Promise<void> {
+    const scan = this.adoptScan.then(() => this.scanSessions());
+    this.adoptScan = scan.catch(() => {});
+    return scan;
+  }
+
+  private async scanSessions(): Promise<void> {
+    let changed: Awaited<ReturnType<Store["adoptForeignSessions"]>>;
     let vanished: { id: string; projectId: string }[];
     try {
-      changed = this.store.adoptForeignSessions(this.sessionsDir());
+      changed = await this.store.adoptForeignSessions(this.sessionsDir());
       vanished = this.store.forgetVanishedForeignSessions();
     } catch {
       // Another host's directory is not ours to depend on: an
@@ -310,9 +329,15 @@ export class CoreService {
       return;
     }
     const projectIds = new Set<string>();
-    for (const { id: sessionId, appended } of changed) {
+    for (const { id: sessionId, appended, replaced, unlistedProjectId } of changed) {
+      if (unlistedProjectId) {
+        this.broadcast({ type: "session.removed", sessionId, projectId: unlistedProjectId });
+        projectIds.add(unlistedProjectId);
+        continue;
+      }
       const session = this.store.describeSession(sessionId);
       if (!session) continue;
+      if (replaced) this.broadcast({type:"session.history-replaced", sessionId});
       this.broadcast({ type: "session.state", session });
       for (const entry of appended) {
         this.dispatchRecord({
@@ -331,7 +356,8 @@ export class CoreService {
   }
 
   private sessionsDir(): string {
-    return resolveSessionsDir(this.configPath, this.options.env);
+    if (!this.options.dataDir && !this.options.sessionsDir) return this.store.sessionStore().sessionsDir;
+    return this.options.sessionsDir ?? resolveSessionsDir(this.configPath, { ...this.env, HOME: this.home, SPEX_HOME: this.options.dataDir ?? this.env.SPEX_HOME });
   }
 
   private watchSessionsDir(): void {
@@ -349,14 +375,14 @@ export class CoreService {
       }
       if (filename?.endsWith(".records.jsonl")) {
         const session = this.store.describeSession(filename.slice(0, -".records.jsonl".length));
-        if (session && !session.foreign) return;
+        if (session?.live) return;
       }
       // Bound the wait even while a CLI keeps writing: later events
       // join this scan instead of postponing it until the writer stops.
       if (this.adoptTimer) return;
       this.adoptTimer = setTimeout(() => {
         this.adoptTimer = undefined;
-        this.syncForeignSessions();
+        void this.syncForeignSessions();
       }, 150);
     });
   }
@@ -429,6 +455,7 @@ export class CoreService {
     this.sessionsWatcher?.close();
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
     if (this.adoptTimer) clearTimeout(this.adoptTimer);
+    await this.adoptScan;
     if (this.ledgerTimer) clearTimeout(this.ledgerTimer);
     // Kill any in-flight compile child so shutdown never orphans slc.
     for (const controller of this.activeCompiles.values()) controller.abort();
@@ -466,7 +493,7 @@ export class CoreService {
       nextComposed = undefined;
     } else {
       try {
-        const loaded = await loadConfig(this.configPath, this.options.loadModule);
+        const loaded = await loadConfig(this.configPath, this.options.loadModule, {libraryDir:this.libraryDir()});
         nextComposed = loaded.composed;
         nextState = {
           status: "valid",
@@ -664,7 +691,7 @@ export class CoreService {
       });
     } catch (error) {
       const code: ErrorCode =
-        error instanceof CoreError ? error.code : "internal";
+        error instanceof CoreError ? error.code : (error as {code?:string})?.code === "PLAYBOOK_SESSION_LEASE_ACTIVE" ? "busy" : "internal";
       const message = error instanceof Error ? error.message : String(error);
       this.send(client.socket, {
         type: "reply",
@@ -679,6 +706,9 @@ export class CoreService {
     client: ClientState,
     command: Command,
   ): Promise<unknown> {
+    if (["session.create", "session.retry", "turn.submit", "project.create", "project.remove", "project.rebind", "config.edit", "compile.run", "intent.queue", "intent.edit", "intent.move", "intent.link", "intent.close", "intent.remove"].includes(command.type)) {
+      this.store.assertWritable();
+    }
     switch (command.type) {
       case "config.get":
         return this.configState;
@@ -688,6 +718,7 @@ export class CoreService {
         return this.store.listProjects();
       case "project.register": {
         const path = expandPath(command.path, this.home);
+        if (!this.store.getProjectByPath(path)) this.store.assertWritable();
         if (!existsSync(path) || !statSync(path).isDirectory()) {
           throw new CoreError(
             "invalid_request",
@@ -703,9 +734,25 @@ export class CoreService {
         const registered = this.store.registerProject(path, basename(path), Date.now());
         // The shared session store may already hold this project's
         // history from the CLI; it lists from now on (core-service-60).
-        this.syncForeignSessions();
+        await this.syncForeignSessions();
         return registered;
       }
+      case "project.rebind": {
+        const path = expandPath(command.path, this.home);
+        if (!(await isWorkTreeRoot(path, this.runCommand))) {
+          throw new CoreError("invalid_request", `${path} is not the root of a git work tree`);
+        }
+        if (this.sessions.listSessions().some((session) => session.projectId === command.projectId && session.live)) {
+          throw new CoreError("busy", "end the project's live session before rebinding it");
+        }
+        const project = this.store.rebindProject({ id: command.projectId, path,
+          ...(command.aliases ? { aliases: command.aliases } : {}),
+          ...(command.revision ? { revision: command.revision } : {}) });
+        await this.syncForeignSessions();
+        return project;
+      }
+      case "storage.diagnostics":
+        return [...this.store.storageDiagnostics(), ...this.store.sessionDiagnostics()];
       case "project.create": {
         const path = expandPath(command.path, this.home);
         if (this.store.getProjectByPath(path)) {
@@ -789,6 +836,21 @@ export class CoreService {
       case "session.dispose":
         await this.sessions.disposeSession(command.sessionId);
         return null;
+      case "session.retry": {
+        const session = this.store.describeSession(command.sessionId);
+        if (!session) throw new CoreError("not_found", `no session ${command.sessionId}`);
+        const project = this.store.getProject(session.projectId);
+        if (!project) throw new CoreError("invalid_request", "bind the existing project before retrying");
+        await this.sessions.retrySession(project, session.id);
+        return {accepted: true};
+      }
+      case "session.discard": {
+        const session = this.store.describeSession(command.sessionId);
+        if (!session) throw new CoreError("not_found", `no session ${command.sessionId}`);
+        const result = await this.sessions.discardSession(session.id);
+        if (result.removed) this.broadcast({type:"session.removed", sessionId:session.id, projectId:session.projectId});
+        return result;
+      }
       case "session.delete": {
         const session = this.store.describeSession(command.sessionId);
         if (!session) {
@@ -799,19 +861,7 @@ export class CoreService {
         if (this.sessions.getLive(session.id)) {
           throw new CoreError("busy", "end the session before deleting it");
         }
-        // Deleting is the one write that crosses hosts (DR-042): a
-        // session the CLI wrote goes only while no writer holds its
-        // lease (core-service-75).
-        if (session.foreign) {
-          const holder = this.store.sessionLeaseHolder(session.id);
-          if (holder) {
-            throw new CoreError(
-              "busy",
-              `the session is held by pid ${holder.pid} on ${holder.hostname} — end it there before deleting it`,
-            );
-          }
-        }
-        this.store.deleteSession(session.id);
+        await this.store.deleteSession(session.id);
         this.broadcast({
           type: "session.removed",
           sessionId: session.id,
@@ -951,6 +1001,7 @@ export class CoreService {
           try {
             result = await compilePlaybook({
               playbookId: command.playbookId,
+              configPath: this.configPath,
               source: {
                 ...(command.sourceText !== undefined
                   ? { text: command.sourceText }
@@ -1282,33 +1333,14 @@ export class CoreService {
     }
   }
 
-  /**
-   * Continue an ended session on a Boss message (core-service-73):
-   * only a session this core ran, whole, holding a snapshot, under a
-   * valid config. Each refusal says why and what to do instead — a
-   * session that cannot continue stays read-only.
-   */
+  /** Continue either host's checkpoint through the shared lifecycle. */
   private async continueSession(sessionId: string): Promise<void> {
     const session = this.store.describeSession(sessionId);
     if (!session) throw new CoreError("not_found", `no session ${sessionId}`);
-    if (session.foreign) {
-      throw new CoreError(
-        "invalid_request",
-        "this session was run from the terminal and is read-only here — start a new session",
-      );
-    }
-    if (session.streamIncompleteAfterSeq !== undefined) {
-      throw new CoreError(
-        "invalid_request",
-        "this session's stream is incomplete, so it cannot continue — start a new session",
-      );
-    }
-    const snapshot = this.store.getSnapshot(sessionId);
-    if (!snapshot) {
-      throw new CoreError(
-        "invalid_request",
-        "this session holds no Captain snapshot to continue from — start a new session",
-      );
+    if (!session.continuable) {
+      throw new CoreError("invalid_request", session.recovery
+        ? "Recover the interrupted turn with Retry or Discard first"
+        : session.continuationReason ?? "this session has no compatible checkpoint");
     }
     const project = this.store.getProject(session.projectId);
     if (!project) {
@@ -1322,7 +1354,7 @@ export class CoreService {
           : "config file is missing",
       );
     }
-    await this.sessions.continueSession(project, this.composed, session, snapshot);
+    await this.sessions.continueSession(project, this.composed, session);
   }
 
   /** The intent named must exist and still be open (DR-035). */

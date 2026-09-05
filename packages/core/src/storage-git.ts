@@ -7,7 +7,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseDocument } from "yaml";
-import { UUID, parsePrefs, readJsonFile, StorageFormatError, validateApplicationTree, writeApplicationFile, type StorageDiagnostic } from "./app-storage.js";
+import { UUID, parsePrefs, readJsonFile, StorageFormatError, validateApplicationTree, validateIntentDispatches, writeApplicationFile, type StorageDiagnostic } from "./app-storage.js";
 
 export type StorageChoice = "ours" | "theirs";
 export interface StorageMergeUnit { name: string; paths: string[]; choice: StorageChoice | "conflict" }
@@ -109,11 +109,7 @@ export async function validateStorageTree(home: string, selectedSessionIds?: Rea
     for (const entry of result.history.entries) if (entry.record.type === "turn_started" && Number.isSafeInteger(entry.record.turnId)) turns.add(entry.record.turnId as number);
     sessions.set(id, { projectId: bound, turns });
   }
-  for (const intent of app.intents.values()) {
-    if (!intent.dispatched) continue;
-    const session = sessions.get(intent.dispatched.sessionId); if (!session) continue; // deleted targets retain ledger derivation
-    if (session.projectId !== undefined && session.projectId !== intent.projectId || !session.turns.has(intent.dispatched.turnId)) throw new StorageFormatError(`intents/${intent.projectId}.jsonl`, `invalid dispatch for ${intent.id}`);
-  }
+  validateIntentDispatches(app.intents, sessions);
   return diagnostics;
 }
 

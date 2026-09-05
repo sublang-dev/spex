@@ -5,7 +5,7 @@
 
 ## Status
 
-Accepted
+Accepted; failed-disposal ownership is amended by [DR-048](048-failed-session-cleanup.md).
 
 ## Context
 

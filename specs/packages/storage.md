@@ -138,7 +138,7 @@ When selecting stored data during a Git merge, the validator shall compare both 
 Before reopening selected state, the validator shall validate the complete selected tree without modifying file contents, after permission preparation [[storage-10](#storage-10)]:
 
 - file versions, closed encodings and checkpoint/digest relationships are valid [[storage-2](#storage-2)] [[storage-3](#storage-3)] [[storage-4](#storage-4)] [[storage-5](#storage-5)] [[1]];
-- open intent source identities and ranks are unique within a project, `after` dependency links name existing intents and form no cycle, and dispatch targets still present belong to the same project with valid turn boundaries;
+- open artifact-source identities and ranks are unique within a project [[core-service-42](core-service.md#core-service-42)], `after` dependency links name existing intents and form no cycle, and dispatch targets still present belong to the same project with valid turn boundaries;
 - deleted session targets retain the existing ledger re-derivation behavior [[core-service-70](core-service.md#core-service-70)]; a missing session alone is not permission to discard a verdict or repeat work;
 - missing registry IDs and unresolved `cwd` values are reported and their records remain unlisted, without blocking unrelated valid projects or automatically restoring registrations;
 - incompatible modules or unsupported checkpoint relocation permit history only; invalid structured data blocks writes and reports the failing file and reason.

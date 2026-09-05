@@ -69,7 +69,7 @@ Where a project is registered ([DR-006](../decisions/006-projects-and-forge.md))
 - While a live session exists for a project, a further session request for the same project is rejected and creates no session.
 - Live sessions for distinct projects run concurrently.
 - While a session is live, a client's disposal request persists the session's Captain snapshot [[core-service-72](#core-service-72)], disposes the session's runtime, reports the session as ended, and a subsequent session request for the same project is accepted; ending pauses the conversation, which a Boss message continues [[core-service-73](#core-service-73)] ([DR-042](../decisions/042-sessions-continue.md)).
-- Where the runtime's own disposal fails, the session is still reported as ended and its project still accepts a new session, with the failure reported to the requesting client — a runtime that failed to dispose is unusable, so holding its project would strand it until a restart.
+- Where disposal fails, the core reports the error and retains the session's lease and project reservation until cleanup is confirmed; stopping the owning process allows later recovery through the shared lease checks ([DR-048](../decisions/048-failed-session-cleanup.md)).
 
 #### core-service-72
 
@@ -98,7 +98,7 @@ When a client requests deletion of any stored session, the core service shall ob
 
 When a client requests the session list, the core service shall reply with every stored session's lifecycle fields and its conversation summary ([DR-029](../decisions/029-session-history-home.md)):
 
-- each entry carries the session's resolved project, creation and end times, and liveness; host of origin is not an admission condition;
+- each entry carries the session's resolved project, creation and end times, liveness and `turnActive`, which stays true until the turn transaction settles or fails; host of origin is not an admission condition;
 - each entry says whether a Boss message continues it, using the shared checkpoint, replay and execution checks [[core-service-73](#core-service-73)], with a reason when history-only;
 - each uncertain entry carries `recovery: {state: "uncertain", input}` with the exact saved input; uncertainty is never reported as normal continuability;
 - each entry carries a title — the first Boss turn's text — absent when the session held no turn;
@@ -109,6 +109,18 @@ When a client requests the session list, the core service shall reply with every
 When the core service reports a session's state to subscribed clients — at each turn's start and end, when the session ends, and when a message continues it [[core-service-73](#core-service-73)], and after recovery [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)] — the report shall carry that session's conversation summary as the listing carries it [[core-service-32](#core-service-32)] ([DR-029](../decisions/029-session-history-home.md)), never the summary the session was created with:
 
 - A session is named from the turn that starts, not the turn that finishes, so a running session is never listed as having said nothing.
+
+#### core-service-87
+
+When a rescan replaces an indexed session's history, the core shall publish `session.history-replaced` with its `sessionId` before its updated summary, allowing clients to reload instead of combining incompatible histories [[storage-11](storage.md#storage-11)].
+
+#### core-service-85
+
+When a client sends `project.rebind` with `projectId`, local `path`, optional recorded `aliases` and optional Git `revision`, the core shall apply the existing-identity binding rules [[storage-6](storage.md#storage-6)] after verifying that the path is a repository root and the project has no live session.
+
+#### core-service-86
+
+When a client sends `storage.diagnostics`, the core shall report each unresolved binding or invalid stored file as `{file, reason, blocking}`, preserving the data and distinguishing history-only limitations from write-blocking damage [[storage-12](storage.md#storage-12)].
 
 ### Boss Turns
 
@@ -352,8 +364,8 @@ Where the host shell names a legacy SQLite store, when the core service starts o
 
 When a host shell stops the core service, the core service shall persist every live session's Captain snapshot [[core-service-72](#core-service-72)] and attempt disposal of its runtime, close its endpoint and its store, and report the disposal failures to the host once every session has been attempted:
 
-- One session's disposal failure neither skips another session's disposal nor leaves the endpoint or the store open, so no live runtime survives a stop because an earlier one failed.
-- Each attempted session is recorded as ended whether or not its runtime disposal succeeded [[core-service-4](#core-service-4)].
+- One session's disposal failure neither skips another session's disposal nor leaves the endpoint or the store open.
+- Successful cleanup reports the session as ended; failed cleanup retains its ownership evidence [[core-service-4](#core-service-4)].
 
 ## Internal Behavior
 
@@ -489,7 +501,7 @@ Where a client subscribes to a session that then runs a fake-adapter turn and is
 
 #### core-service-40
 
-Where a live session's runtime fails its disposal, the test suite shall request that session's disposal over the protocol and assert the failing-disposal case of [[core-service-4](#core-service-4)]: the request replies with an error carrying the runtime's failure, and a fresh session request for the same project is then accepted.
+Where a live session's runtime fails its disposal, the test suite shall request that session's disposal over the protocol and assert the failing-disposal case of [[core-service-4](#core-service-4)]: the request reports the failure and a fresh session request for the same project remains blocked.
 
 ### Shutdown Coverage
 
@@ -546,7 +558,11 @@ Where a stored session has ended and a second session is live, the test suite sh
 
 #### core-service-78
 
-Where fixture sessions another host wrote [[core-service-60](#core-service-60)] sit in the sessions directory — one leased to a dead process on this host beside a retired lease, one leased to another host, and one unleased — the test suite shall assert the cross-host deletion contract: `session.delete` on the dead-leased session removes its record and stream, leaves both lease directories, drops it from the listing, and reaches a subscribed client as a removal [[core-service-70](#core-service-70)] [[core-service-75](#core-service-75)]; on the session leased to another host it is refused `busy` naming that host, its files intact [[core-service-75](#core-service-75)]; and removing the unleased session's files while the service runs makes it leave the listing with a removal broadcast [[core-service-76](#core-service-76)].
+Where fixture sessions another host wrote [[core-service-60](#core-service-60)] sit in the sessions directory — one leased to a dead process on this host beside a retired lease, one leased to another host, and one unleased — the test suite shall assert the cross-host deletion contract: `session.delete` on the dead-leased session removes its record and stream through the shared lease, preserves retired guards, drops it from the listing, and reaches a subscribed client as a removal [[core-service-70](#core-service-70)] [[core-service-75](#core-service-75)]; on the session leased to another host it is refused `busy` naming that host, its files intact [[core-service-75](#core-service-75)]; and removing the unleased session's files while the service runs makes it leave the listing with a removal broadcast [[core-service-76](#core-service-76)].
+
+#### core-service-88
+
+When an integration suite changes stored history and project bindings through a running core, it shall verify removal and restoration of a recorded-path alias [[core-service-85](#core-service-85)], diagnostics preserving unresolved files [[core-service-86](#core-service-86)], and history-replacement notification before the updated summary [[core-service-87](#core-service-87)].
 
 #### core-service-77
 

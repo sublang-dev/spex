@@ -106,7 +106,6 @@ Amends:
 - History is portable; exact resumption needs compatible runtimes, with fresh provider conversations as fallback.
 - Different repository or module paths permit history only under schema 7, even with fresh conversations. Cross-device continuation at changed paths requires a versioned Playbook relocation contract.
 - Align the three projects' contracts before rollout; Git supplies ancestry and recovery history without a separate synchronization engine.
-- Current requirements belong in spec packages; the inventory remains descriptive.
 
 ## References
 

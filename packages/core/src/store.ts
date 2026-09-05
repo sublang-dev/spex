@@ -1,33 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 SubLang International <https://sublang.ai>
 
-// The file state (DR-036, CORE-15): plain files under one state root
-// are the durable truth, and every in-memory index rebuilds from them
-// at startup. The core package is the only writer of the Spex-owned
-// files. Sessions persist as one record-stream JSONL plus a project-
-// binding sidecar per session; turns, titles, and usage fold from the
-// stream and are never separately stored (CORE-10). The sidecar also
-// carries the token-free Captain snapshot a message continues the
-// session from (DR-042). Intents persist
-// as per-project append-only act logs (CORE-52). Hidden records ride
-// the stream with their visibility, so replay filters identically to
-// live streaming. A root lease admits one core per root (CORE-61),
-// and a legacy SQLite store imports once (CORE-64) through
-// better-sqlite3 — the import path's only remaining use.
+// Application files belong to Spex; session files and mutations belong
+// to Playbook. These maps are rebuilt projections for UI and intent folds.
 
 import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { hostname } from "node:os";
-import { join } from "node:path";
+import { hostname, tmpdir } from "node:os";
+import { createSessionStore, validateSessionContext, type SharedSessionStore, type SessionManifest } from "@sublang/playbook/session-store";
+import { isAbsolute, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { execFileSync } from "node:child_process";
+import {
+  ApplicationRegistry, foldIntentActs, parseIntentLog, parsePrefs, parseRegistry,
+  readJsonFile, StorageFormatError, validateIntentRelations, validateIntentDispatches,
+  type IntentAct, type RebindProjectOptions, type StorageDiagnostic,
+} from "./app-storage.js";
 import { createRequire } from "node:module";
 
 import type {
@@ -53,24 +51,6 @@ import {
 export type { UsageEntry, UsageTotals } from "./stream-fold.js";
 
 const META_VERSION = 1;
-
-/**
- * The Captain's durable state at the session's last settled point
- * (DR-042), persisted in the sidecar: the Captain shell's own export
- * with every provider token stripped. `shell` is absent for a Captain
- * that exports no state — continuation then starts it fresh, the
- * stream still carrying the conversation.
- */
-export interface CaptainSnapshot {
-  v: 1;
-  shell?: unknown;
-}
-
-/** Who holds a session's lease in the shared session store (DR-042). */
-export interface SessionLeaseHolder {
-  pid: number;
-  hostname: string;
-}
 
 /** Another core instance holds the state root (CORE-61). */
 export class StateRootHeldError extends Error {
@@ -106,18 +86,13 @@ interface SessionMeta {
   /** Set when an append failed: the file is a complete prefix only up
    * to this sequence; later records lived in memory only (DR-036). */
   streamIncompleteAfterSeq?: number;
-  /** Set on a session another host wrote into the shared store: this
-   * core serves it and writes none of its files (core-service-65),
-   * deleting them only on request (core-service-70). In memory only —
-   * we write no sidecar for it. */
+  /** Legacy presentation label, never recovery authority. */
   foreign?: true;
-  /** The directory a foreign session's files were found in — where a
-   * deletion reaches them and where their vanishing is noticed
-   * (DR-042). In memory only. */
+  /** Shared directory used to detect removal by another host. */
   originDir?: string;
-  /** The Captain snapshot a message continues the session from
-   * (DR-042); absent until a turn or the session's end persisted one. */
-  snapshot?: CaptainSnapshot;
+  continuable?: boolean;
+  continuationReason?: string;
+  recovery?: SessionInfo["recovery"];
 }
 
 interface TurnRow {
@@ -133,14 +108,6 @@ interface StoreMeta {
   importedLegacy?: string[];
 }
 
-type IntentAct =
-  | { act: "queue"; intent: IntentInfo }
-  | { act: "edit"; id: string; text: string }
-  | { act: "move"; id: string; rank: string }
-  | { act: "link"; id: string; afterId: string | null }
-  | { act: "dispatch"; id: string; sessionId: string; turnId: number; at: number }
-  | { act: "close"; id: string; as: "done" | "dropped"; at: number }
-  | { act: "remove"; id: string; at: number };
 
 function isHidden(record: TmuxPlayRecord): boolean {
   return (
@@ -175,16 +142,10 @@ function sessionInfo(
     ...(meta.streamIncompleteAfterSeq !== undefined
       ? { streamIncompleteAfterSeq: meta.streamIncompleteAfterSeq }
       : {}),
-    // Served, never written or continued here (core-service-32, DR-042).
     ...(meta.foreign ? { foreign: true } : {}),
-    // Ended, this core's own, holding a snapshot, and whole: a Boss
-    // message continues it (core-service-32, core-service-73).
-    ...(!meta.live &&
-    !meta.foreign &&
-    meta.snapshot !== undefined &&
-    meta.streamIncompleteAfterSeq === undefined
-      ? { continuable: true }
-      : {}),
+    ...(!meta.live && meta.continuable ? { continuable: true } : {}),
+    ...(meta.continuationReason ? { continuationReason: meta.continuationReason } : {}),
+    ...(meta.recovery ? { recovery: meta.recovery } : {}),
   };
 }
 
@@ -253,42 +214,6 @@ function readRecordsPrefix(file: string, retainSequenceGaps = false): { records:
   return { records, ...(incompleteAfterSeq !== undefined ? { incompleteAfterSeq } : {}) };
 }
 
-/**
- * JSONL lines of a file this store owns and appends, healing crash
- * damage in place: a torn trailing line is dropped and the file
- * rewritten to its recovered content, and a file missing its final
- * newline is completed — so a later append can never glue onto damage
- * and turn a tolerated tail into permanent corruption. Only lawful
- * under the root lease: a reader without the lease uses
- * `readRecordsPrefix` and mutates nothing.
- */
-function readLinesHealing<T>(file: string): T[] {
-  if (!existsSync(file)) return [];
-  const text = readFileSync(file, "utf8");
-  const lines = text.split("\n");
-  const out: T[] = [];
-  const good: string[] = [];
-  let torn = false;
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    try {
-      out.push(JSON.parse(line) as T);
-      good.push(line);
-    } catch (error) {
-      if (i === lines.length - 1) {
-        torn = true;
-        break;
-      }
-      throw error;
-    }
-  }
-  if (torn || !text.endsWith("\n")) {
-    writeAtomic(file, good.length > 0 ? `${good.join("\n")}\n` : "");
-  }
-  return out;
-}
-
 function usageTotals(entries: UsageEntry[]): UsageTotals {
   const sources = new Set<string>();
   const totals = { inputTokens: 0, outputTokens: 0, toolUses: 0, totalCostUsd: 0 };
@@ -303,63 +228,6 @@ function usageTotals(entries: UsageEntry[]): UsageTotals {
 }
 
 
-/**
- * The Boss-level history a pre-stream captain-session record holds,
- * as the records a stream would carry: each `boss` journal entry opens
- * a turn with its prompt, each `reply` is the Captain's reply, and a
- * turn closes when the next opens or the journal ends. Timestamps are
- * the record's own — its creation for the first turn, its last update
- * for the final close — since the journal carries none.
- */
-function journalRecords(record: {
-  createdAt?: unknown;
-  updatedAt?: unknown;
-  snapshot?: { journal?: unknown };
-}): StoredRecord[] {
-  const journal = record.snapshot?.journal;
-  if (!Array.isArray(journal)) return [];
-  const createdAt = Date.parse(String(record.createdAt)) || 0;
-  const updatedAt = Date.parse(String(record.updatedAt)) || createdAt;
-  const out: StoredRecord[] = [];
-  let openTurn: number | undefined;
-  const close = (timestamp: number): void => {
-    if (openTurn === undefined) return;
-    out.push({
-      seq: out.length + 1,
-      record: { type: "turn_finished", turnId: openTurn, timestamp } as TmuxPlayRecord,
-    });
-    openTurn = undefined;
-  };
-  for (const entry of journal as { turnId?: unknown; kind?: unknown; payload?: unknown }[]) {
-    if (typeof entry?.turnId !== "number" || typeof entry.payload !== "string") continue;
-    if (entry.kind === "boss") {
-      close(createdAt);
-      openTurn = entry.turnId;
-      out.push({
-        seq: out.length + 1,
-        record: {
-          type: "turn_started",
-          turnId: entry.turnId,
-          timestamp: createdAt,
-          turn: { id: entry.turnId, prompt: entry.payload },
-        } as TmuxPlayRecord,
-      });
-    } else if (entry.kind === "reply" && openTurn === entry.turnId) {
-      out.push({
-        seq: out.length + 1,
-        record: {
-          type: "captain_reply",
-          turnId: entry.turnId,
-          timestamp: createdAt,
-          text: entry.payload,
-        } as TmuxPlayRecord,
-      });
-    }
-  }
-  close(updatedAt);
-  return out;
-}
-
 export class Store {
   private readonly dir?: string;
   private readonly sessionsDir?: string;
@@ -368,12 +236,17 @@ export class Store {
 
   private meta: StoreMeta = { version: META_VERSION };
   private readonly projects = new Map<string, ProjectInfo>();
+  private application = new ApplicationRegistry();
   private readonly prefs = new Map<string, unknown>();
   private readonly forgeCache = new Map<string, { at: number; state: ForgeState }>();
   private readonly intents = new Map<string, IntentInfo>();
   /** Intents a remove act retired (DR-038): their acts stay in the
    * log, and every read passes them by. */
   private readonly removedIntents = new Set<string>();
+  private shared?: SharedSessionStore;
+  private temporarySessions?: string;
+  private readonly sessionProblems = new Map<string, StorageDiagnostic>();
+  private readonly untrackedSessions = new Set<string>();
   private readonly sessions = new Map<string, SessionMeta>();
   private readonly records = new Map<string, StoredRecord[]>();
   private readonly turns = new Map<string, Map<number, TurnRow>>();
@@ -391,10 +264,15 @@ export class Store {
     mkdirSync(join(this.dir, "intents"), { recursive: true });
     this.acquireRootLease();
     try {
-      this.meta = readJson<StoreMeta>(this.metaFile()) ?? { version: 0 };
+      this.meta = existsSync(this.metaFile()) ? readJsonFile(this.metaFile()) as StoreMeta : { version: 0 };
+      if (!this.meta || typeof this.meta !== "object" || Array.isArray(this.meta) || ![0, META_VERSION].includes(this.meta.version) || Object.keys(this.meta).some((key) => !["version", "importedLegacy"].includes(key)) ||
+          (this.meta.importedLegacy !== undefined && (!Array.isArray(this.meta.importedLegacy) || !this.meta.importedLegacy.every((value) => typeof value === "string")))) {
+        throw new StorageFormatError(this.metaFile(), "unsupported migration metadata; original bytes preserved");
+      }
       this.importLegacy(options.legacyDbPath);
       this.meta.version = META_VERSION;
       writeAtomic(this.metaFile(), JSON.stringify(this.meta));
+      this.application = new ApplicationRegistry(this.dir);
       this.load();
     } catch (error) {
       this.releaseRootLease();
@@ -499,11 +377,15 @@ export class Store {
   // Every file kind carries its version marker (core-service-15):
   // whole files as a `v` wrapper, JSONL files as a `v` on each line.
   private saveProjects(): void {
-    if (!this.dir) return;
-    writeAtomic(
-      join(this.dir, "projects.json"),
-      JSON.stringify({ v: 1, projects: [...this.projects.values()] }),
-    );
+    this.application.save();
+  }
+
+  private refreshProjects(): void {
+    this.projects.clear();
+    for (const id of this.application.identities.keys()) {
+      const project = this.application.project(id);
+      if (project) this.projects.set(id, project);
+    }
   }
 
   private savePrefs(): void {
@@ -522,17 +404,16 @@ export class Store {
     );
   }
 
-  private saveSidecar(meta: SessionMeta): void {
-    // Another host owns its own session's files (core-service-65).
-    if (!this.sessionsDir || meta.foreign) return;
-    const { originDir: _origin, ...persisted } = meta;
-    writeAtomic(this.sidecarFile(meta.id), JSON.stringify({ v: 1, ...persisted }));
-  }
-
   private appendIntentAct(projectId: string, act: IntentAct): void {
     if (!this.dir) return;
+    const file = this.intentsFile(projectId);
+    if (existsSync(file)) {
+      const contents = readFileSync(file, "utf8");
+      if (contents && !contents.endsWith("\n")) throw new StorageFormatError(file, "incomplete final act; restore or remove the incomplete tail before writing");
+    }
+    parseIntentLog(`${JSON.stringify({ v: 1, ...act })}\n`, projectId, file);
     appendFileSync(
-      this.intentsFile(projectId),
+      file,
       `${JSON.stringify({ v: 1, ...act })}\n`,
     );
   }
@@ -541,17 +422,9 @@ export class Store {
 
   private load(): void {
     const dir = this.dir as string;
-    for (const project of readJson<{ projects: ProjectInfo[] }>(
-      join(dir, "projects.json"),
-    )?.projects ?? []) {
-      this.projects.set(project.id, project);
-    }
-    for (const [key, value] of Object.entries(
-      readJson<{ prefs: Record<string, unknown> }>(join(dir, "prefs.json"))
-        ?.prefs ?? {},
-    )) {
-      this.prefs.set(key, value);
-    }
+    this.refreshProjects();
+    const prefsFile = join(dir, "prefs.json");
+    for (const [key, value] of Object.entries(existsSync(prefsFile) ? parsePrefs(readJsonFile(prefsFile), prefsFile) : {})) this.prefs.set(key, value);
     for (const [projectId, entry] of Object.entries(
       readJson<{ entries: Record<string, { at: number; state: ForgeState }> }>(
         join(dir, "forge-cache.json"),
@@ -561,10 +434,11 @@ export class Store {
     }
     for (const file of readdirSync(join(dir, "intents"))) {
       if (!file.endsWith(".jsonl")) continue;
-      for (const act of readLinesHealing<IntentAct>(join(dir, "intents", file))) {
-        this.foldIntentAct(act);
-      }
+      const filename = join(dir, "intents", file);
+      const acts = parseIntentLog(readFileSync(filename, "utf8"), file.slice(0, -6), filename);
+      foldIntentActs(acts, filename, this.intents, this.removedIntents);
     }
+    validateIntentRelations(this.intents, this.removedIntents);
     const sessionsDir = this.sessionsDir as string;
     for (const file of readdirSync(sessionsDir)) {
       if (!file.endsWith(".spex.json")) continue;
@@ -576,7 +450,6 @@ export class Store {
         meta.streamIncompleteAfterSeq = Math.min(meta.streamIncompleteAfterSeq ?? incompleteAfterSeq, incompleteAfterSeq);
         // Keep the raw damaged stream for inspection. The existing
         // continuation gate refuses it instead of appending onto damage.
-        this.saveSidecar(meta);
       }
       this.records.set(meta.id, stored);
       // Turns, titles, and usage are never separately stored: the
@@ -597,108 +470,166 @@ export class Store {
    * sessions this core owns are never replaced. Returns changes only,
    * with new records to stream where the prior history is a prefix.
    */
-  adoptForeignSessions(sessionsDir: string): { id: string; appended: StoredRecord[] }[] {
+  sessionStore(sessionsDir = this.shared?.sessionsDir ?? this.sessionsDir): SharedSessionStore {
+    sessionsDir ??= this.temporarySessions ??= mkdtempSync(join(tmpdir(), "spex-memory-sessions-"));
+    if (!this.shared || this.shared.sessionsDir !== sessionsDir) {
+      this.shared = createSessionStore({ sessionsDir });
+    }
+    return this.shared;
+  }
+
+  async initializeSessions(sessionsDir = this.sessionsDir): Promise<void> {
+    if (!sessionsDir) return;
+    const shared = this.sessionStore(sessionsDir);
+    await shared.prepare();
+    for (const filename of readdirSync(sessionsDir)) {
+      const sidecar = filename.endsWith(".spex.json");
+      if (!sidecar && !/^[0-9a-f-]{36}\.json$/.test(filename)) continue;
+      const id = filename.slice(0, -(sidecar ? ".spex.json" : ".json").length);
+      const sourcePath = join(sessionsDir, filename);
+      try {
+        const source = readJson<Record<string, unknown>>(sourcePath);
+        if (!source || (!sidecar && source.schemaVersion === 7)) continue;
+        const cwd = sidecar && typeof source.projectId === "string"
+          ? this.getProject(source.projectId)?.path : undefined;
+        await shared.migrate(id, { sourcePath, ...(cwd ? { cwd } : {}) });
+      } catch (error) {
+        this.untrackedSessions.add(id);
+        this.sessionProblems.set(id, {file:sourcePath, reason:String(error), blocking:false});
+      }
+    }
+    await this.adoptForeignSessions(sessionsDir);
+  }
+
+  async adoptForeignSessions(sessionsDir: string): Promise<{ id: string; appended: StoredRecord[]; replaced?: boolean; unlistedProjectId?: string }[]> {
     if (!existsSync(sessionsDir)) return [];
-    const changed: { id: string; appended: StoredRecord[] }[] = [];
-    for (const file of readdirSync(sessionsDir)) {
-      // Our own sidecars end `.spex.json`; a captain-session record is
-      // `<id>.json`, and every other file in the directory is theirs.
-      if (!file.endsWith(".json") || file.endsWith(".spex.json")) continue;
-      const id = file.slice(0, -".json".length);
-      const previousMeta = this.sessions.get(id);
-      if (previousMeta && !previousMeta.foreign) continue;
-      let record: {
-        sessionId?: unknown;
-        cwd?: unknown;
-        createdAt?: unknown;
-        updatedAt?: unknown;
-        snapshot?: { journal?: unknown };
-      } | undefined;
-      let stored: StoredRecord[];
-      try {
-        record = readJson(join(sessionsDir, file));
-        const stream = join(sessionsDir, `${id}.records.jsonl`);
-        // A legacy record with no replay stream carries the Boss
-        // conversation in its journal. An unfinished stream is not
-        // permission to replace its history with synthetic records.
-        stored = [];
-        if (existsSync(stream)) {
-          stored = readRecordsPrefix(stream).records;
-        } else if (record) {
-          stored = journalRecords(record);
-        }
-      } catch {
-        // A malformed or concurrently replaced neighbor cannot hide
-        // healthy sessions, or erase its own last readable history.
-        continue;
-      }
-      if (
-        !record ||
-        typeof record.cwd !== "string" ||
-        record.sessionId !== id
-      ) {
-        continue;
-      }
-      const project = this.getProjectByPath(record.cwd);
-      if (!project) continue;
-      if (stored.length === 0) continue;
-      let folds: { turn: TurnEvent | undefined; usage: UsageEntry | undefined }[];
-      try {
-        folds = stored.map((entry) => ({
-          turn: foldTurnEvent(entry.record),
-          usage: foldUsage(id, entry.record),
-        }));
-      } catch {
-        // A malformed event payload is isolated before replacing any
-        // already served metadata or folds for this session.
-        continue;
-      }
-      const players = [
-        ...new Set(
-          stored
-            .filter((entry) => hasPresentationHeader(entry.record) &&
-              (entry.record.type === "player_prompt" || entry.record.type === "player_event" || entry.record.type === "player_finished"))
-            .map((entry) => (entry.record as { playerId?: unknown }).playerId)
-            .filter((playerId): playerId is string => typeof playerId === "string"),
-        ),
-      ];
-      const timestamps = stored.map((entry) => entry.record.timestamp).filter(Number.isFinite);
-      const createdAt = timestamps[0] ?? (Date.parse(String(record.createdAt)) || 0);
-      const endedAt = timestamps.at(-1) ?? (Date.parse(String(record.updatedAt)) || createdAt);
-      const meta: SessionMeta = {
-        id,
-        projectId: project.id,
-        createdAt,
-        endedAt,
-        // Liveness belongs to the core that runs a session; a session
-        // another host wrote is never live here (core-service-10).
-        live: false,
-        players: players.map((playerId) => ({ id: playerId })) as SessionInfo["players"],
-        initialVisible: players,
-        // Read-only: this core writes none of another host's files
-        // (core-service-65); a deletion reaches them here (DR-042).
-        foreign: true,
-        originDir: sessionsDir,
-      };
-      const previous = this.records.get(id) ?? [];
-      const previousLines = previous.map((entry) => JSON.stringify(entry));
-      const nextLines = stored.map((entry) => JSON.stringify(entry));
-      const extendsPrefix = previousLines.every((line, index) => line === nextLines[index]);
-      if (
-        previousMeta &&
-        extendsPrefix && previous.length === stored.length &&
-        JSON.stringify(previousMeta) === JSON.stringify(meta)
-      ) continue;
-      this.sessions.set(id, meta);
-      this.records.set(id, stored);
-      // Re-fold replacement history from zero, so re-reading a CLI
-      // session never counts its previous usage a second time.
-      this.turns.delete(id);
-      this.usage.delete(id);
-      for (const fold of folds) this.applyRecordFold(id, fold.turn, fold.usage);
-      changed.push({ id, appended: extendsPrefix ? stored.slice(previous.length) : [] });
+    const shared = this.sessionStore(sessionsDir);
+    const changed: { id: string; appended: StoredRecord[]; replaced?: boolean; unlistedProjectId?: string }[] = [];
+    for (const filename of readdirSync(sessionsDir)) {
+      if (!/^[0-9a-f-]{36}\.json$/.test(filename)) continue;
+      const id = filename.slice(0, -5);
+      if (this.sessions.get(id)?.live) continue;
+      const update = await this.refreshSession(id, false);
+      if (update) changed.push(update);
     }
     return changed;
+  }
+
+  async refreshSession(id: string, live?: boolean): Promise<{ id: string; appended: StoredRecord[]; replaced?: boolean; unlistedProjectId?: string } | undefined> {
+    const shared = this.sessionStore();
+    let manifest: SessionManifest;
+    let stored: StoredRecord[];
+    let continuable = false;
+    let reason: string | undefined;
+    let incompleteAfterSeq: number | undefined;
+    let problem: StorageDiagnostic | undefined;
+    try {
+      const checked = await shared.validate(id);
+      manifest = checked.manifest as SessionManifest;
+      if (manifest.schemaVersion === 7 && !checked.integrityValid) problem = {file:join(shared.sessionsDir, `${id}.json`), reason:checked.reasons.join("; ") || "session checkpoint and replay disagree", blocking:true};
+      stored = checked.history.entries.map(({ v: _v, ...entry }) => entry as unknown as StoredRecord);
+      continuable = manifest.schemaVersion === 7 && checked.resumable && manifest.state === "settled" && manifest.unresolvedEffects.length === 0;
+      reason = checked.reasons.join("; ") || (manifest.state === "uncertain" ? "Recover the interrupted turn with Retry or Discard" : manifest.schemaVersion === 7 && manifest.state === "settled" && manifest.unresolvedEffects.length ? "Reconcile unresolved effects before continuation" : undefined);
+      if (checked.history.incomplete || checked.history.pendingTail || (manifest.schemaVersion === 7 && manifest.replay.incomplete)) {
+        incompleteAfterSeq = Math.min(checked.history.lastReadableSeq, manifest.schemaVersion === 7 ? manifest.replay.seq : checked.history.lastReadableSeq);
+      }
+    } catch (error) {
+      reason = error instanceof Error ? error.message : String(error);
+      this.untrackedSessions.add(id);
+      problem = {file:join(shared.sessionsDir, `${id}.json`), reason, blocking: !/unsupported.*version|version.*unsupported/i.test(reason)};
+      this.sessionProblems.set(id, problem);
+      // Unknown versions remain opaque and readable; these fields only
+      // associate history, never authorize recovery or rewrite the file.
+      let raw: Record<string, unknown> | undefined;
+      try { raw = readJson<Record<string, unknown>>(join(shared.sessionsDir, `${id}.json`)); } catch { return; }
+      if (!raw || raw.sessionId !== id || typeof raw.cwd !== "string") return;
+      manifest = raw as unknown as SessionManifest;
+      try {
+        const history = await shared.readHistory(id);
+        stored = history.entries.map(({ v: _v, ...entry }) => entry as unknown as StoredRecord);
+        if (history.incomplete) incompleteAfterSeq = history.lastReadableSeq;
+      } catch { return; }
+    }
+    if (typeof manifest.cwd !== "string") {
+      this.sessionProblems.set(id, {file:join(shared.sessionsDir, `${id}.json`),reason:"session working directory is missing or invalid",blocking:manifest.schemaVersion === 7});
+      return;
+    }
+    const project = this.getProjectByPath(manifest.cwd);
+    if (!project) {
+      this.sessionProblems.set(id, problem ?? {file:join(shared.sessionsDir, `${id}.json`), reason:`No project binding for ${manifest.cwd}`, blocking:false});
+      const prior = this.sessions.get(id);
+      if (prior) {
+        this.sessions.delete(id);
+        this.records.delete(id);
+        this.turns.delete(id);
+        this.usage.delete(id);
+        return { id, appended: [], unlistedProjectId: prior.projectId };
+      }
+      return;
+    }
+    let players: SessionInfo["players"] = [];
+    let initialVisible: string[] = [];
+    let hasContext = false;
+    for (const entry of stored) {
+      if ((entry.record as {type?: unknown}).type !== "session_context") continue;
+      try {
+        const context = validateSessionContext(entry.record);
+        hasContext = true;
+        players = context.configuration.players.map((player) => ({
+          id: player.id as string, adapter: player.adapter as SessionInfo["players"][number]["adapter"],
+          ...(player.model?.kind === "value" ? { model: player.model.value as string } : {}),
+          ...(typeof player.fastMode === "boolean" ? { fastMode: player.fastMode } : {}),
+        }));
+        initialVisible = [...context.initialVisible];
+      } catch { /* Unsupported context does not invalidate other history. */ }
+    }
+    if (!hasContext) {
+      const ids = new Set(stored.filter(({record}) => hasPresentationHeader(record) && ["player_prompt", "player_event", "player_finished"].includes(record.type)).map(({record}) => (record as {playerId?: unknown}).playerId).filter((value): value is string => typeof value === "string"));
+      players = [...ids].map((id) => ({ id })) as SessionInfo["players"];
+      initialVisible = [...ids];
+    }
+    const prior = this.sessions.get(id);
+    const meta: SessionMeta = {
+      id, projectId: project.id,
+      createdAt: Date.parse(manifest.createdAt) || stored.find(({record}) => hasPresentationHeader(record))?.record.timestamp || 0,
+      endedAt: live ? null : Date.parse(manifest.updatedAt) || stored.reduce((last, entry) => Math.max(last, Number(entry.record.timestamp) || 0), 0),
+      live: live ?? prior?.live ?? false,
+      players, initialVisible, originDir: shared.sessionsDir,
+      ...(continuable ? { continuable: true } : {}),
+      ...(reason ? { continuationReason: reason } : {}),
+      ...(manifest.state === "uncertain" && manifest.uncertain
+        ? { recovery: {state: "uncertain", input: manifest.uncertain.input} as const } : {}),
+      ...(incompleteAfterSeq !== undefined ? { streamIncompleteAfterSeq: incompleteAfterSeq } : {}),
+    };
+    if (problem) this.sessionProblems.set(id, problem);
+    else this.sessionProblems.delete(id);
+    const previous = this.records.get(id) ?? [];
+    const prefix = previous.every((entry,index) => isDeepStrictEqual(entry, stored[index]));
+    if (prefix && previous.length === stored.length && JSON.stringify(prior) === JSON.stringify(meta)) return;
+    if (!prefix && this.prefs.delete(`viewed:${id}`)) this.savePrefs();
+    this.sessions.set(id, meta);
+    this.records.set(id, stored);
+    this.turns.delete(id);
+    this.usage.delete(id);
+    for (const entry of stored) this.foldRecord(id, entry.record);
+    return { id, appended: prefix ? stored.slice(previous.length) : [], ...(!prefix && prior ? {replaced:true} : {}) };
+  }
+
+  sessionDiagnostics(): { file: string; reason: string; blocking: boolean }[] {
+    return [...this.sessionProblems.values()];
+  }
+
+  untrackedSessionPaths(): string[] {
+    if (!this.dir || !this.shared) return [];
+    const directory = relative(this.dir, this.shared.sessionsDir);
+    if (directory.startsWith("..") || isAbsolute(directory)) return [];
+    return [...this.untrackedSessions].flatMap((id) => [join(directory, `${id}.json`), join(directory, `${id}.records.jsonl`)]);
+  }
+
+  assertWritable(): void {
+    this.validateStorage();
+    const problem = this.sessionDiagnostics().find((entry) => entry.blocking);
+    if (problem) throw new StorageFormatError(problem.file, problem.reason);
   }
 
   /**
@@ -710,7 +641,7 @@ export class Store {
   forgetVanishedForeignSessions(): { id: string; projectId: string }[] {
     const gone: { id: string; projectId: string }[] = [];
     for (const meta of [...this.sessions.values()]) {
-      if (!meta.foreign || !meta.originDir) continue;
+      if (meta.live || !meta.originDir) continue;
       if (existsSync(join(meta.originDir, `${meta.id}.json`))) continue;
       this.dropSession(meta.id);
       gone.push({ id: meta.id, projectId: meta.projectId });
@@ -718,54 +649,7 @@ export class Store {
     return gone;
   }
 
-  /**
-   * The live holder of a foreign session's lease, if any (DR-042): the
-   * CLI guards its writers with `.<id>.lock/owner.json` naming a pid
-   * and host. A lease on another host can never be probed, so it
-   * always counts as held; a lease on this host is held while its pid
-   * is alive. No lease, or a dead pid on this host, holds nothing.
-   */
-  sessionLeaseHolder(id: string): SessionLeaseHolder | undefined {
-    const meta = this.sessions.get(id);
-    if (!meta?.foreign || !meta.originDir) return undefined;
-    const owner = this.readLeaseOwner(join(meta.originDir, `.${id}.lock`));
-    if (!owner || typeof owner.pid !== "number") return undefined;
-    if (owner.hostname !== hostname() || processAlive(owner.pid)) {
-      return { pid: owner.pid, hostname: owner.hostname };
-    }
-    return undefined;
-  }
-
-  private foldIntentAct(act: IntentAct): void {
-    if (act.act === "queue") {
-      this.intents.set(act.intent.id, { ...act.intent });
-      return;
-    }
-    const intent = this.intents.get(act.id);
-    if (!intent) return;
-    switch (act.act) {
-      case "edit":
-        intent.text = act.text;
-        break;
-      case "move":
-        intent.rank = act.rank;
-        break;
-      case "link":
-        if (act.afterId === null) delete intent.afterId;
-        else intent.afterId = act.afterId;
-        break;
-      case "dispatch":
-        intent.dispatched = { sessionId: act.sessionId, turnId: act.turnId, at: act.at };
-        break;
-      case "close":
-        intent.closedAt = act.at;
-        intent.closedAs = act.as;
-        break;
-      case "remove":
-        this.removedIntents.add(act.id);
-        break;
-    }
-  }
+  foldStoredRecord(sessionId: string, record: TmuxPlayRecord): void { this.foldRecord(sessionId, record); }
 
   private foldRecord(sessionId: string, record: TmuxPlayRecord): void {
     this.applyRecordFold(sessionId, foldTurnEvent(record), foldUsage(sessionId, record));
@@ -832,24 +716,23 @@ export class Store {
       // The import merges into whatever the root already holds — a
       // second shell's legacy store must never clobber the first's
       // imported state or anything written since.
-      const existingProjects =
-        readJson<{ projects: ProjectInfo[] }>(join(dir, "projects.json"))
-          ?.projects ?? [];
-      const takenIds = new Set(existingProjects.map((project) => project.id));
+      const current = readJson<{ v: number; projects: ProjectInfo[] }>(join(dir, "projects.json"));
+      const portable = current?.v === 2 ? new ApplicationRegistry(dir) : undefined;
+      if (current && current.v !== 1 && current.v !== 2) throw new StorageFormatError("projects.json", "unsupported registry version");
+      const existingProjects = portable ? [...portable.identities.keys()].map((id) => portable.project(id)).filter((project): project is ProjectInfo => project !== undefined) : current?.projects ?? [];
+      const takenIds = new Set(portable ? portable.identities.keys() : existingProjects.map((project) => project.id));
       const takenPaths = new Set(existingProjects.map((project) => project.path));
       const mergedProjects = [...existingProjects];
       for (const row of rows("SELECT id, path, name, registered_at FROM projects")) {
         if (takenIds.has(row.id as string) || takenPaths.has(row.path as string)) {
           continue;
         }
-        mergedProjects.push({
-          id: row.id as string,
-          path: row.path as string,
-          name: row.name as string,
-          registeredAt: row.registered_at as number,
-        });
+        const imported = { id: row.id as string, path: row.path as string, name: row.name as string, registeredAt: row.registered_at as number };
+        if (portable) portable.bind({ id: imported.id, name: imported.name, registeredAt: imported.registeredAt }, imported.path);
+        else mergedProjects.push(imported);
+        takenIds.add(imported.id); takenPaths.add(imported.path);
       }
-      writeAtomic(
+      if (!portable) writeAtomic(
         join(dir, "projects.json"),
         JSON.stringify({ v: 1, projects: mergedProjects }),
       );
@@ -898,14 +781,16 @@ export class Store {
             ? { closedAs: row.closed_as as "done" | "dropped" }
             : {}),
         };
-        this.appendIntentAct(intent.projectId, { act: "queue", intent });
+        const existingLog = this.intentsFile(intent.projectId);
+        const alreadyQueued = existsSync(existingLog) && parseIntentLog(readFileSync(existingLog, "utf8"), intent.projectId, existingLog).some((act) => act.act === "queue" && act.intent.id === intent.id);
+        if (!alreadyQueued) this.appendIntentAct(intent.projectId, { act: "queue", intent });
       }
       for (const row of rows(
         "SELECT id, project_id, created_at, ended_at, players_json, initial_visible_json FROM sessions",
       )) {
         // A session the root already holds is never overwritten: the
         // file state is newer than any legacy copy of it.
-        if (existsSync(this.sidecarFile(row.id as string))) continue;
+        if (existsSync(this.sidecarFile(row.id as string)) || existsSync(join(this.sessionsDir!, `${row.id}.json`))) continue;
         const meta: SessionMeta = {
           id: row.id as string,
           projectId: row.project_id as string,
@@ -917,7 +802,7 @@ export class Store {
           players: JSON.parse(row.players_json as string) as SessionInfo["players"],
           initialVisible: JSON.parse(row.initial_visible_json as string) as string[],
         };
-        this.saveSidecar(meta);
+
         const lines: string[] = [];
         let recordRows: Record<string, unknown>[];
         try {
@@ -941,9 +826,10 @@ export class Store {
           };
           lines.push(JSON.stringify({ v: 1, ...stored }));
         }
-        if (lines.length > 0) {
-          writeAtomic(this.recordsFile(meta.id), `${lines.join("\n")}\n`);
-        }
+        writeAtomic(this.recordsFile(meta.id), lines.length ? `${lines.join("\n")}\n` : "");
+        // Stage legacy metadata for Playbook's conversion, publishing it
+        // after the complete replay so interrupted imports can retry.
+        writeAtomic(this.sidecarFile(meta.id), JSON.stringify({v:1, ...meta}));
       }
     } finally {
       db.close();
@@ -951,35 +837,61 @@ export class Store {
   }
 
   close(): void {
+    if (this.temporarySessions) rmSync(this.temporarySessions, {recursive: true, force:true});
     this.releaseRootLease();
   }
 
   // -- projects -------------------------------------------------------------
 
   registerProject(path: string, name: string, at: number): ProjectInfo {
-    const existing = this.getProjectByPath(path);
-    if (existing) return existing;
-    const project: ProjectInfo = { id: randomUUID(), path, name, registeredAt: at };
-    this.projects.set(project.id, project);
-    this.saveProjects();
+    const project = this.application.register(path, name, at);
+    this.refreshProjects();
     return project;
+  }
+
+  rebindProject(options: RebindProjectOptions): ProjectInfo {
+    let identity = this.application.identities.get(options.id);
+    if (options.revision !== undefined) {
+      if (!this.dir) throw new Error("restoring a project requires a disk store");
+      const revision = execFileSync("git", ["-C", this.dir, "rev-parse", "--verify", `${options.revision}^{commit}`], { encoding: "utf8" }).trim();
+      const ancestor = execFileSync("git", ["-C", this.dir, "merge-base", revision, "HEAD"], { encoding: "utf8" }).trim();
+      if (ancestor !== revision) throw new Error("project restoration requires an ancestor of the current branch");
+      const bytes = execFileSync("git", ["-C", this.dir, "show", `${revision}:projects.json`], { encoding: "utf8" });
+      identity = parseRegistry(JSON.parse(bytes)).find((project) => project.id === options.id);
+    }
+    if (!identity) throw new Error(`project ${options.id} is absent; select its registry revision to restore it`);
+    const project = this.application.bind(identity, options.path, options.aliases);
+    this.refreshProjects();
+    return project;
+  }
+
+  storageDiagnostics(): StorageDiagnostic[] {
+    const reports = this.application.diagnostics();
+    const absent = new Set([...this.intents.values()].filter((intent) => !this.application.identities.has(intent.projectId)).map((intent) => intent.projectId));
+    for (const id of absent) reports.push({ file: `intents/${id}.jsonl`, reason: `unregistered project ${id}`, blocking: false });
+    return reports;
+  }
+
+  validateStorage(): StorageDiagnostic[] {
+    validateIntentRelations(this.intents, this.removedIntents);
+    validateIntentDispatches(this.intents, new Map([...this.sessions.values()].map((session) => [session.id, {
+      projectId: session.projectId,
+      turns: new Set(this.turns.get(session.id)?.keys() ?? []),
+    }])));
+    return this.storageDiagnostics();
   }
 
   listProjects(): ProjectInfo[] {
     return [...this.projects.values()].sort((a, b) => a.registeredAt - b.registeredAt);
   }
 
-  getProject(id: string): ProjectInfo | undefined {
-    return this.projects.get(id);
-  }
+  getProject(id: string): ProjectInfo | undefined { return this.projects.get(id); }
 
-  getProjectByPath(path: string): ProjectInfo | undefined {
-    return this.listProjects().find((project) => project.path === path);
-  }
+  getProjectByPath(path: string): ProjectInfo | undefined { return this.application.resolvePath(path); }
 
   removeProject(id: string): boolean {
-    const removed = this.projects.delete(id);
-    if (removed) this.saveProjects();
+    const removed = this.application.remove(id);
+    if (removed) this.refreshProjects();
     return removed;
   }
 
@@ -996,7 +908,7 @@ export class Store {
       initialVisible: session.initialVisible,
     };
     this.sessions.set(meta.id, meta);
-    this.saveSidecar(meta);
+
   }
 
   endSession(id: string, endedAt: number): void {
@@ -1004,7 +916,7 @@ export class Store {
     if (!meta) return;
     meta.live = false;
     meta.endedAt = endedAt;
-    this.saveSidecar(meta);
+
   }
 
   /** A message continued the ended session (core-service-73): live
@@ -1016,60 +928,34 @@ export class Store {
     meta.live = true;
     meta.endedAt = null;
     meta.players = players;
-    this.saveSidecar(meta);
+
   }
 
-  /** Persist the Captain's settled state (core-service-72). */
-  setSnapshot(id: string, snapshot: CaptainSnapshot): void {
-    const meta = this.sessions.get(id);
-    if (!meta || meta.foreign) return;
-    meta.snapshot = snapshot;
-    this.saveSidecar(meta);
-  }
-
-  getSnapshot(id: string): CaptainSnapshot | undefined {
-    return this.sessions.get(id)?.snapshot;
-  }
-
-  /**
-   * Delete a stored session (core-service-70): its files and every
-   * in-memory trace — records, turns, usage, and the viewed marker.
-   * A session another host wrote loses its record and stream where
-   * they were found and nothing else — never a lease directory; the
-   * caller has checked the lease (core-service-75).
-   */
-  deleteSession(id: string): void {
-    const meta = this.sessions.get(id);
-    if (!meta) return;
-    if (meta.foreign) {
-      if (meta.originDir) {
-        rmSync(join(meta.originDir, `${id}.json`), { force: true });
-        rmSync(join(meta.originDir, `${id}.records.jsonl`), { force: true });
-      }
-    } else if (this.sessionsDir) {
-      rmSync(this.sidecarFile(id), { force: true });
-      rmSync(this.recordsFile(id), { force: true });
-    }
+  /** Shared lease and manifest-last deletion, followed by index cleanup. */
+  async deleteSession(id: string): Promise<void> {
+    if (this.sessions.get(id)?.live) throw new Error("end the session before deleting it");
+    if (this.shared || this.sessionsDir) await this.sessionStore().delete(id);
     this.dropSession(id);
   }
+
+  forgetSession(id: string): void { this.dropSession(id); }
 
   /** Every in-memory trace of a session, gone. */
   private dropSession(id: string): void {
     this.sessions.delete(id);
+    this.sessionProblems.delete(id);
+    this.untrackedSessions.delete(id);
     this.records.delete(id);
     this.turns.delete(id);
     this.usage.delete(id);
     if (this.prefs.delete(`viewed:${id}`)) this.savePrefs();
   }
 
-  /** Startup recovery (CORE-10): a session live at shutdown is no
-   * longer live. Its snapshot stays, so it lists continuable
-   * (DR-042). */
+  /** Local runtime liveness is never restored from stored history. */
   markAllSessionsNotLive(): void {
     for (const meta of this.sessions.values()) {
       if (!meta.live) continue;
       meta.live = false;
-      this.saveSidecar(meta);
     }
   }
 
@@ -1259,36 +1145,6 @@ export class Store {
       ...(role !== undefined ? { role } : {}),
     };
     this.recordsOf(sessionId).push(stored);
-    const meta = this.sessions.get(sessionId);
-    // Another host owns its own session's stream (core-service-65).
-    if (!this.sessionsDir || meta?.foreign) return;
-    // Once latched, the file stays a clean durable prefix: memory-only
-    // records after the latch are served live but never claimed stored.
-    if (meta?.streamIncompleteAfterSeq !== undefined) return;
-    try {
-      appendFileSync(
-        this.recordsFile(sessionId),
-        `${JSON.stringify({ v: 1, ...stored })}\n`,
-      );
-    } catch (error) {
-      // Fail soft (DR-036): record I/O must not kill the turn, and
-      // truncated history must not be presented as complete — latch
-      // the incompleteness at the last durable sequence.
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(
-        `spex: session ${sessionId} record stream write failed (${message}); ` +
-          `stream is complete only up to seq ${seq - 1}`,
-      );
-      if (meta) {
-        meta.streamIncompleteAfterSeq = seq - 1;
-        try {
-          this.saveSidecar(meta);
-        } catch {
-          // The latch still holds in memory; the sidecar write shares
-          // whatever ails the disk.
-        }
-      }
-    }
   }
 
   getRecords(
@@ -1336,9 +1192,18 @@ export class Store {
 
   // -- intents (DR-035, the act log of CORE-52) -----------------------------
 
+  private commitIntentAct(projectId: string, act: IntentAct): void {
+    const next = new Map([...this.intents].map(([id, intent]) => [id, structuredClone(intent)]));
+    const removed = new Set(this.removedIntents);
+    foldIntentActs([act], `intents/${projectId}.jsonl`, next, removed);
+    validateIntentRelations(next, removed);
+    this.appendIntentAct(projectId, act);
+    this.intents.clear(); for (const [id, intent] of next) this.intents.set(id, intent);
+    this.removedIntents.clear(); for (const id of removed) this.removedIntents.add(id);
+  }
+
   addIntent(intent: IntentInfo): void {
-    this.intents.set(intent.id, { ...intent });
-    this.appendIntentAct(intent.projectId, { act: "queue", intent });
+    this.commitIntentAct(intent.projectId, { act: "queue", intent });
   }
 
   getIntent(id: string): IntentInfo | undefined {
@@ -1373,7 +1238,7 @@ export class Store {
     return [...this.intents.values()]
       .filter(
         (intent) =>
-          intent.closedAt === undefined && !this.removedIntents.has(intent.id),
+          intent.closedAt === undefined && !this.removedIntents.has(intent.id) && this.projects.has(intent.projectId),
       )
       .sort((a, b) =>
         a.projectId === b.projectId
@@ -1445,23 +1310,19 @@ export class Store {
   setIntentText(id: string, text: string): void {
     const intent = this.intents.get(id);
     if (!intent) return;
-    intent.text = text;
-    this.appendIntentAct(intent.projectId, { act: "edit", id, text });
+    this.commitIntentAct(intent.projectId, { act: "edit", id, text });
   }
 
   setIntentRank(id: string, rank: string): void {
     const intent = this.intents.get(id);
     if (!intent) return;
-    intent.rank = rank;
-    this.appendIntentAct(intent.projectId, { act: "move", id, rank });
+    this.commitIntentAct(intent.projectId, { act: "move", id, rank });
   }
 
   setIntentLink(id: string, afterId: string | null): void {
     const intent = this.intents.get(id);
     if (!intent) return;
-    if (afterId === null) delete intent.afterId;
-    else intent.afterId = afterId;
-    this.appendIntentAct(intent.projectId, { act: "link", id, afterId });
+    this.commitIntentAct(intent.projectId, { act: "link", id, afterId });
   }
 
   /** The dispatch binding, stamped when the turn starts and re-written
@@ -1474,8 +1335,7 @@ export class Store {
   ): void {
     const intent = this.intents.get(id);
     if (!intent) return;
-    intent.dispatched = { sessionId, turnId, at };
-    this.appendIntentAct(intent.projectId, { act: "dispatch", id, sessionId, turnId, at });
+    this.commitIntentAct(intent.projectId, { act: "dispatch", id, sessionId, turnId, at });
   }
 
   /** The remove act (core-service-79, DR-038): a closed intent retires
@@ -1486,16 +1346,13 @@ export class Store {
   removeIntent(id: string, at: number): void {
     const intent = this.intents.get(id);
     if (!intent) return;
-    this.removedIntents.add(id);
-    this.appendIntentAct(intent.projectId, { act: "remove", id, at });
+    this.commitIntentAct(intent.projectId, { act: "remove", id, at });
   }
 
   closeIntent(id: string, as: "done" | "dropped", at: number): void {
     const intent = this.intents.get(id);
     if (!intent) return;
-    intent.closedAt = at;
-    intent.closedAs = as;
-    this.appendIntentAct(intent.projectId, { act: "close", id, as, at });
+    this.commitIntentAct(intent.projectId, { act: "close", id, as, at });
   }
 
   // -- prefs ----------------------------------------------------------------
