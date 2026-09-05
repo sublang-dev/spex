@@ -4,7 +4,8 @@
 # Current storage inventory
 
 Writers inspected on 2026-09-05; this inventory defines no new contract.
-[DR-045](../../specs/decisions/045-unified-session-storage.md) holds the proposed decisions and open format definitions.
+[DR-045](../../specs/decisions/045-unified-session-storage.md) records the accepted replacement and links its owning contracts.
+The [storage catalog](../storage.md) explains the target layout for readers.
 
 ## Paths
 

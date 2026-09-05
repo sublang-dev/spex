@@ -68,7 +68,7 @@ meta.md       The spec of specs
 | [DR-042](decisions/042-sessions-continue.md) | 042-sessions-continue.md | Sessions continue: a token-free Captain snapshot in the sidecar lets a message continue an ended session; every listed session, terminal-run ones included, can be deleted behind a lease check |
 | [DR-043](decisions/043-minimal-spec-editing.md) | 043-minimal-spec-editing.md | Minimal spec editing: one confined atomic write with digest-token conflicts, a whole-file plain-text editor with preview in the spec view, drafts that survive navigation |
 | [DR-044](decisions/044-no-money-in-the-interface.md) | 044-no-money-in-the-interface.md | No money in the interface: the usage line reports tokens only; a recorded cost is never rendered |
-| [DR-045](decisions/045-unified-session-storage.md) | 045-unified-session-storage.md | Proposed desktop/CLI storage: one Spex home, portable history/graphs, optional provider continuity, Git with whole-session choices |
+| [DR-045](decisions/045-unified-session-storage.md) | 045-unified-session-storage.md | Shared desktop/CLI storage: one Spex home, portable history/graphs, local provider hints, Git with whole-session choices |
 | [DR-046](decisions/046-decision-record-evolution.md) | 046-decision-record-evolution.md | Accepted-decision evolution: successor DRs, scoped reciprocal links, current spec items updated on acceptance |
 | [DR-037](decisions/037-playbook-12-adoption.md) | 037-playbook-12-adoption.md | Playbook 12 adoption: floor ^12.2 (with slc 0.7) / cligent ^0.24, host capabilities from the shipped builder with an in-memory effect ledger, installed template and `dev` built-in, one-time config relocation, journal-listed history |
 | [DR-038](decisions/038-history-is-done-work.md) | 038-history-is-done-work.md | History is done work: finished records as history seeds, removal without trace, verdict grammar, the project Overview tab, session deletion, the fast-mode mark |
@@ -91,6 +91,7 @@ meta.md       The spec of specs
 | [run-view.md](packages/run-view.md) | Run view: Captain pane, read-only player transcripts, Boss composer, paused sessions a message continues, protocol-only rendering, fixture-stream and browser-journey coverage |
 | [scaffold.md](packages/scaffold.md) | Scaffold CLI: target resolution, idempotent seeding, LICENSE emission, language selection, agent instructions, and --update prompts for reconciliation or legacy migration |
 | [server-shell.md](packages/server-shell.md) | Server shell: one-command source launch; UI bundle with negotiated response compression and core WebSocket served from one port; token URL, TLS, bind safety, page connection |
+| [storage.md](packages/storage.md) | Spex home catalog, file encodings, local project bindings, migration and Git selection |
 | [settings.md](packages/settings.md) | Settings: Captain agent editor with launcher-parity validation, adapter readiness, comment-preserving YAML round-trip |
 | [shared-config-roundtrip.md](packages/shared-config-roundtrip.md) | One config file, one fail-closed rule set across Settings, core, and Library |
 | [spec-view.md](packages/spec-view.md) | Spec view: package tree, filters + search, citation jumps, records reader, whole-file editor with digest-token saves; specs.get/specs.read/specs.write contract for the packages layout |

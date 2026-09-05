@@ -108,7 +108,7 @@ When a client requests a playbook's artifacts, the core package shall resolve th
 
 #### playbook-library-36
 
-When the core package derives a playbook's artifacts from its FSM, the core package shall serve the machine graph beside the state ids, derived from the machine's own config rather than its source text ([DR-028](../decisions/028-run-machine-view.md)):
+When the core package derives the current Library playbook's artifacts from its FSM, the core package shall serve the machine graph beside the state ids, derived from the machine's own config rather than its source text ([DR-028](../decisions/028-run-machine-view.md)):
 
 - nodes carry the state id, its parent for a nested state, its kind (a final state named as such), the player role the state invokes when its meta names one, and its tags;
 - edges carry a stable identity of owner state, event, branch index, and target index — guarded sibling branches staying distinct — with the event name as the label and an empty event naming the always transition;
@@ -199,6 +199,12 @@ When the registry form [[playbook-library-7](#playbook-library-7)] is submitted 
 #### playbook-library-15
 
 When a registry entry is about to be registered into the shared config, the registry validator shall apply the same fail-closed rules the playbook loader applies at load ([DR-004](../decisions/004-config-and-persistence.md)) — including: the `playbooks` key equals the manifest id; the manifest at `from` imports successfully; no duplicate id or command among configured playbooks; no reserved captain role among role names; every required role resolved; at least one visible role; every agent resolving a supported adapter — and shall reject a violating registration naming the violated rule, leaving the shared config file unmodified.
+
+### Portable Library
+
+#### playbook-library-46
+
+When a compiled playbook is registered, the Library shall retain its source, write a config-relative managed locator, and ensure generated files relocate or rebuild before use [[storage-8](storage.md#storage-8)], resolving the same locator for loading, validation and artifact lookup [[storage-7](storage.md#storage-7)].
 
 ### Config Writes
 
@@ -297,3 +303,7 @@ Where the browser journey harness ([DR-039](../decisions/039-browser-acceptance-
 - the open stage's box carries a grip that names the stage, and a drag of it leaves the box taller with the height still standing after a reload [[playbook-library-22](#playbook-library-22)];
 - removing a configured playbook asks for the inline confirm — Remove or Keep [[playbook-library-26](#playbook-library-26)] — then leaves the config without it [[playbook-library-16](#playbook-library-16)];
 - a role's binding editor opened at the 320-pixel viewport floor stands wholly inside the surface's box, which scrolls in neither direction [[playbook-library-43](#playbook-library-43)].
+
+#### playbook-library-47
+
+When the integration suite copies a registered library to a differently located Spex root, it shall verify config-relative module and artifact resolution, retained sources and successful local rebuilding or an explicit unavailable result [[playbook-library-46](#playbook-library-46)].

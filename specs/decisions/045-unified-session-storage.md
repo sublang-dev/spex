@@ -5,7 +5,8 @@
 
 ## Status
 
-Proposed (2026-09-04); would amend:
+Accepted (2026-09-05); implementation awaits the owner's review of the completed storage specifications.
+Amends:
 
 - [DR-036](036-file-state-store.md): storage ownership, default locations, local data and Git synchronization.
 - [DR-037](037-playbook-12-adoption.md): host integration and effect-ledger durability.
@@ -16,7 +17,7 @@ Proposed (2026-09-04); would amend:
 - Desktop and CLI share replay but have separate lifecycles; only CLI has durable write-ahead effect recovery.
 - Historical graphs and complete CLI player metadata are missing; provider conversations live outside Spex.
 - Goal: shared management and portable storage with minimal mechanisms and explicit assumptions.
-- The [storage inventory](../../docs/design/unified-storage.md) describes current files and encodings.
+- The [storage catalog](../../docs/storage.md) explains the target layout; the [current inventory](../../docs/design/unified-storage.md) records existing files and encodings.
 
 ## Decision
 
@@ -41,7 +42,7 @@ Proposed (2026-09-04); would amend:
 
 ### Portability
 
-- Before Git tracking, Playbook extracts local hints from all recovery bindings and migrates supported CLI manifests/sidecars to validated token-free bundles. Original/unsupported inputs stay untracked and ignored; shared Git ancestry starts after migration.
+- Before Git tracking, Playbook removes provider tokens from all recovery bindings and migrates supported CLI manifests/sidecars to validated token-free bundles. Legacy tokens cannot prove checkpoint continuity and are not promoted to usable hints; originals stay ignored, and shared Git ancestry starts after migration.
 - Track project identities (`id`, `name`, `registeredAt`) in `projects.json`; ignored `local/project-paths.json` binds each ID to its current absolute path and recorded `cwd` aliases.
 - Both hosts record `cwd`; the CLI needs no registry access. Spex resolves it to a registered ID through local bindings and rescans after registration or rebinding; aliases bind history, not execution authority.
 - Assume each recorded `cwd` identifies one project across devices; unresolved or conflicting bindings require explicit selection. Rebinding selects an existing identity, restores its registry entry from Git ancestry if absent, and assigns a local path without minting an ID.
@@ -60,7 +61,7 @@ Proposed (2026-09-04); would amend:
 ### Presentation and provider continuity
 
 - Store immutable Captain/player identities, roster, settings, bindings and graph definitions as replay context records; checkpoints and events reference them so history renders without installed playbook modules.
-- Provider tokens are disposable local hints bound to participant and exact checkpoint. Exclude them from portable state, including deferred-effect bindings; retain logical operation identities and receipts.
+- Provider tokens are disposable local hints bound to participant and exact checkpoint, consumed durably before use. Deferred-effect bindings retain player/operation identity and receipts without tokens.
 - Missing hints start fresh conversations. Definite pre-execution session rejection invalidates the hint and permits one fresh attempt within the same logical call.
 - Cligent classifies rejection; Playbook supplies Captain's recovery journal or the player's complete task prompt, preserves effect authority and records the reset.
 - Ambiguous execution failures never auto-retry; provider-only knowledge is unrecoverable.
@@ -69,7 +70,7 @@ Proposed (2026-09-04); would amend:
 ### Git synchronization
 
 - Sync only through Git with shared ancestry: one branch per device/root, merged to/from `main`; desktop and CLI share both.
-- Stop all local writers during commit, checkout and merge. Execute each session on one device at a time; leases are local.
+- Stop all local writers during commit, checkout and merge; preserve exact file bytes and private store modes. Execute each session on one device at a time; leases are local.
 - Keep `local/`, `prefs.json`, provider hints, leases/retired guards, caches and migration inputs/receipts untracked and ignored; overrides outside the Git root do not participate.
 - Compare whole session bundles from pre-merge tips against their Git common ancestor, treating absence as deletion:
 
@@ -90,14 +91,12 @@ Proposed (2026-09-04); would amend:
 - Refuse active or unprovable ownership; retain retired lease directories against delayed reclaimers.
 - Git tracks deletions; delete-versus-modify uses whole-session selection. No application tombstones or conflict copies.
 
-### Contracts required before cutover
+### Contract ownership
 
-Define each encoding once in its owning spec package, enforced by shared validators:
-
-| Owner | Required definition |
-| --- | --- |
-| Playbook | Manifest/context versions and fields; token extraction, migration and token-free validation; record headers/unknown-kind rules; context references, digest encoding, hints and supported locator relocation. |
-| Spex | Git selection/store validation; project identities, path/alias resolution and identity restoration; config-relative module resolution; local UI preferences and migration receipts; library rebuilding before omitting generated outputs. |
+- Spex defines the home, local bindings and Git rules [[storage-1](../packages/storage.md#storage-1)] [[storage-6](../packages/storage.md#storage-6)] [[storage-11](../packages/storage.md#storage-11)].
+- Playbook defines schema-7 manifests, context, byte digests, hints and migration [[1]]; its initial contract refuses changed checkpoint paths rather than rewriting them.
+- Cligent defines definite pre-execution resume rejection [[2]].
+- The catalog links these definitions; implementation and integration evidence follow in their owning projects.
 
 ## Consequences
 
@@ -106,3 +105,8 @@ Define each encoding once in its owning spec package, enforced by shared validat
 - Where repository or module paths differ, cross-device continuation requires Playbook-defined checkpoint relocation; until supported, the destination sees history only, even with fresh provider conversations.
 - Align Spex, Playbook and Cligent contracts before rollout; Git supplies ancestry and recovery history without a separate sync engine.
 - Record accepted requirements in their owning spec packages; keep the inventory descriptive.
+
+## References
+
+[1]: https://github.com/sublang-ai/playbook/blob/main/specs/packages/session-storage.md "Shared durable session contract"
+[2]: https://github.com/sublang-ai/cligent/blob/main/specs/packages/engine.md#engine-84 "Definite provider session rejection"

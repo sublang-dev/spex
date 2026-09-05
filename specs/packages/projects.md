@@ -127,9 +127,10 @@ While the project palette is open, the palette shall stand inside the window at 
 
 #### projects-10
 
-Where the core service manages projects, the project registry shall persist one entry per project — identifier, display name, absolute repository path, and creation time — in the state root's registry file ([DR-036](../decisions/036-file-state-store.md)), and shall restore all entries on core startup so registered projects survive app restarts:
+Where the core manages projects, the registry shall persist stable identities separately from machine-local paths [[storage-2](storage.md#storage-2)] [[storage-3](storage.md#storage-3)], using explicit identity-preserving rebinding and Git restoration [[storage-6](storage.md#storage-6)] ([DR-045](../decisions/045-unified-session-storage.md)):
 
-- Removing a project deletes only that project's registry entries; no file under the repository path is deleted or modified.
+- removing a project removes its registration only; repository, session and intent files remain;
+- unresolved or orphaned identities are reported without automatic registration or a replacement UUID.
 
 ### Repository State
 
@@ -178,8 +179,9 @@ When a forge adapter operation fails — executable missing, not authenticated, 
 Where a fixture git repository exists with a named branch checked out, an uncommitted change, and a local upstream remote that it is ahead of and behind by known commit counts, when the repository is registered through the registration flow [[projects-1](#projects-1)], the test suite shall assert that a project card appears showing the project name, the absolute path, the branch name, a dirty indicator, and the expected ahead/behind counts [[projects-4](#projects-4)], collected without any network access [[projects-11](#projects-11)], and shall assert the palette cases below:
 
 - Confirming the same path again creates no duplicate entry [[projects-2](#projects-2)].
+- Explicit rebinding selects an existing ID or restores its exact registration from Git ancestry; a missing or conflicting binding prompts selection without silently minting or registering an identity [[projects-10](#projects-10)].
 - Confirming a directory inside a work tree below its top level is rejected with a message and creates no project entry [[projects-1](#projects-1)].
-- Confirming a directory that is no git work tree initializes a repository there and registers the project [[projects-1](#projects-1)].
+- Confirming a directory that is no Git work tree registers nothing and points to the Create action [[projects-1](#projects-1)].
 
 #### projects-18
 
@@ -202,7 +204,7 @@ Where the stub `gh` reports a not-authenticated state, or `gh` is absent from `P
 
 #### projects-21
 
-Where a fixture repository is registered, when the project is removed and the core service is restarted, the test suite shall assert that no project card or registry entry for it remains after the restart [[projects-10](#projects-10)], and that the repository directory's files and git state are identical to their state before removal [[projects-9](#projects-9)].
+Where a fixture repository is registered, when the project is removed and the core service is restarted, the test suite shall assert that no project card or registry entry for it remains, its session and intent files remain unlisted without automatic registration [[projects-10](#projects-10)], and the repository directory's files and git state are identical to their state before removal [[projects-9](#projects-9)].
 
 ### Label Coverage
 

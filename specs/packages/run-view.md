@@ -324,7 +324,7 @@ While a machine frame has a caller the pane knows, the Captain pane shall draw t
 
 #### run-view-64
 
-Where a run's machine definition is unavailable over the artifacts contract [[playbook-library-36](playbook-library.md#playbook-library-36)], the machine card shall draw the observed truth alone — the states and transitions the trace has delivered — and never block, error, or drop the card for the missing definition ([DR-028](../decisions/028-run-machine-view.md)).
+When rendering a stored run, the machine card shall use its historical graph and participant context [[core-service-80](core-service.md#core-service-80)], drawing only observed states/transitions when that context is unavailable, without blocking or substituting the current module's graph ([DR-045](../decisions/045-unified-session-storage.md)).
 
 #### run-view-74
 
@@ -673,7 +673,7 @@ Where a fixture stream carries a playbook run's trace records — an invocation 
 - the post-terminal reports open no frame and change no settled card — exactly one card per run, its outcome "done" [[run-view-74](#run-view-74)] [[run-view-62](#run-view-62)];
 - a second fixture run that ends by disposal alone, without a terminal transition, settles exactly one card with the outcome "stopped" [[run-view-62](#run-view-62)] [[run-view-74](#run-view-74)];
 - a fixture child naming an unknown caller renders at the top level [[run-view-78](#run-view-78)];
-- with no machine definition served, the same replay still renders the card from observed states alone [[run-view-64](#run-view-64)];
+- removing the module or changing current configuration leaves the stored graph unchanged; with no historical definition, the same replay renders observed states alone [[run-view-64](#run-view-64)];
 - a fixture captain reply record renders as Captain speech in the thread [[run-view-1](#run-view-1)];
 - a fixture captain result reporting an error renders the synthesized cause as a failure line [[run-view-65](#run-view-65)].
 

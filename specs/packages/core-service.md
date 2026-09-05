@@ -73,34 +73,33 @@ Where a project is registered ([DR-006](../decisions/006-projects-and-forge.md))
 
 #### core-service-72
 
-When a Boss turn on a live session ends, and when a live session ends [[core-service-4](#core-service-4)], the core service shall persist the session's Captain snapshot in its sidecar [[core-service-10](#core-service-10)] — the Captain shell's own export, stripped of every provider token — so a crash loses at most the turn underway ([DR-042](../decisions/042-sessions-continue.md)):
+When a Boss turn or live session ends, the core service shall checkpoint through Playbook's shared lifecycle [[1]], preserving its token-free recovery journal, snapshot, effect ledger, uncertainty and durable replay binding in the shared manifest ([DR-045](../decisions/045-unified-session-storage.md)):
 
-- stripping removes every player's resume token and every parked frame's role tokens, and sets the Captain's conversation to reseed from the journal digest on its first call — unopened only while the history is empty — so players begin new conversations on continuation while the Captain carries the story;
-- a shell that cannot export at that moment — a turn still unwinding, a torn state — leaves the last snapshot in place;
-- a Captain that exports no state persists an empty snapshot, and continuation starts it fresh;
-- a snapshot the disk refuses costs continuation, never the turn.
+- the pre-effect write-ahead boundary remains authoritative; inability to export or settle leaves that evidence intact and never fabricates success;
+- provider continuity is optional local hint state; missing hints use Captain's journal or the player's complete task, while ambiguous failures never auto-retry;
+- a session without supported recovery remains history-only, with the reason reported by continuation admission [[core-service-73](#core-service-73)].
 
 #### core-service-70
 
 When a client sends `session.delete` for a stored session, the core service shall delete the session's files and every in-memory trace of it — its records, turns, usage, and viewed marker — and broadcast the removal to subscribed clients, announcing `intents.changed` for its project [[core-service-51](#core-service-51)] ([DR-038](../decisions/038-history-is-done-work.md)):
 
 - a live session is refused with a `busy` error: it ends first [[core-service-4](#core-service-4)];
-- a session another host wrote [[core-service-60](#core-service-60)] is deleted from the shared session store where its files sit — its record and its stream, nothing else, never a lease directory — behind the lease check [[core-service-75](#core-service-75)]: deleting is the one write that crosses hosts ([DR-042](../decisions/042-sessions-continue.md));
+- a session from either interface is deleted through the same shared-store operation and lease check [[core-service-75](#core-service-75)];
 - an open intent the session served re-derives as queued, and a closed one keeps its verdict [[core-service-49](#core-service-49)].
 
 #### core-service-75
 
-When a client sends `session.delete` for a session another host wrote [[core-service-60](#core-service-60)], the core service shall check the session's lease in the shared session store — the playbook CLI's `.<id>.lock` directory naming the holder's pid and host — and refuse with a `busy` error naming the holder while the lease names a live process on this host or any process on another host ([DR-042](../decisions/042-sessions-continue.md)):
+When a client requests deletion of any stored session, the core service shall obtain Playbook's exclusive session lease through the shared deletion operation [[1]] and refuse `busy` on active ownership or a diagnostic refusal on unprovable ownership before changing files:
 
-- no lease, or a lease naming a dead process on this host, holds nothing, and the deletion proceeds [[core-service-70](#core-service-70)];
-- a lease directory — live, dead, or retired — is never removed.
+- deletion removes replay, hints, active legacy sidecar and derived state, then the manifest last; incomplete cleanup is retryable;
+- retired lease guards remain; the core never recursively clears a session lock directory to force admission.
 
 #### core-service-32
 
 When a client requests the session list, the core service shall reply with every stored session's lifecycle fields and its conversation summary ([DR-029](../decisions/029-session-history-home.md)):
 
-- each entry carries the session's project, creation and end times, liveness, and whether another host wrote it;
-- each entry says whether a Boss message continues it [[core-service-73](#core-service-73)]: an ended session this core ran, holding a snapshot [[core-service-72](#core-service-72)], with its stream whole [[core-service-10](#core-service-10)] ([DR-042](../decisions/042-sessions-continue.md));
+- each entry carries the session's resolved project, creation and end times, and liveness; host of origin is not an admission condition;
+- each entry says whether a Boss message continues it, using the shared checkpoint, replay and execution checks [[core-service-73](#core-service-73)], with a reason when history-only;
 - each entry carries a title — the first Boss turn's text — absent when the session held no turn;
 - each entry carries its turn count and whether it ended holding a failure record.
 
@@ -121,19 +120,20 @@ While a session is live and no boss turn is active on it, when a client submits 
 
 #### core-service-73
 
-While a session is ended [[core-service-4](#core-service-4)], when a client submits Boss composer text for it [[core-service-5](#core-service-5)], the core service shall continue the session — restore its snapshot [[core-service-72](#core-service-72)] into a fresh Captain shell behind a new runtime on the same session id [[core-service-74](#core-service-74)], report it live again with its end time cleared [[core-service-34](#core-service-34)], then start the turn — or refuse, naming the reason and the way forward ([DR-042](../decisions/042-sessions-continue.md)):
+While a session is ended, when a client submits Boss text for it, the core service shall request continuation through Playbook's shared lifecycle [[1]], restore the same logical session identity and checkpoint [[core-service-74](#core-service-74)], and report it live before starting the turn [[core-service-34](#core-service-34)], or refuse by these cases:
 
 | Case | Reply |
 | --- | --- |
-| another session of the project is live | `busy`: end it to continue this one |
-| the session was written by another host [[core-service-60](#core-service-60)] | `invalid_request`: read-only here — start a new session |
-| the stream is incomplete [[core-service-10](#core-service-10)] | `invalid_request`: cannot continue — start a new session |
-| no snapshot | `invalid_request`: nothing to continue from — start a new session |
-| the config is missing or invalid [[core-service-2](#core-service-2)] | `invalid_config`, as session creation |
-| the shell rejects the snapshot — playbooks, players, role bindings, or the effect ledger changed since | `invalid_config` naming the drift and offering a new session; the session stays ended and continuable |
+| Another session of the project is live, or a session lease is active | `busy`, naming the holder or session to end |
+| Unsupported recovery, no checkpoint, incomplete stream or digest mismatch | `invalid_request`, history-only with the failing condition |
+| Uncertain work or unresolved repository effects | `invalid_request`, reconcile the stored work before continuation |
+| Missing/ambiguous project binding | `invalid_request`, bind an existing project identity first |
+| Changed checkpoint repository/module paths | `invalid_request`, relocation unsupported; history remains readable |
+| Missing or invalid config | `invalid_config`, as for creation |
+| Structural or runtime mismatch | `invalid_config`, naming the drift and offering a new session |
 
-- an engagement parked on a question resumes with its frames, so the reply lands where the question waited;
-- a refused continuation starts no turn and stamps no intent [[core-service-47](#core-service-47)].
+- desktop and CLI checkpoints use the same cases; missing provider hints alone do not refuse continuation;
+- parked questions resume in their retained frames; a refusal starts no turn and stamps no intent [[core-service-47](#core-service-47)].
 
 #### core-service-6
 
@@ -222,6 +222,28 @@ When a client sends `ledger.history` for a project, the core service shall reply
 
 When the intents table is written [[core-service-52](#core-service-52)], or a session event lands that can change a derived intent state — a turn's start, finish, or abort, a session's end, or an interruption-condition record — the core service shall broadcast an `intents.changed` message naming the affected project to subscribed clients, so every consumer re-reads the one core-side fold [[core-service-49](#core-service-49)] instead of deriving its own ([DR-035](../decisions/035-intent-ledger.md)).
 
+### Intent Storage
+
+#### core-service-52
+
+The core package shall hold intents in one per-project append-only act log of acts and provenance only — no state or status field, every visible state derived at read time by folding the acts [[core-service-49](#core-service-49)] — kept in the state root [[core-service-15](#core-service-15)] and appended solely by the intent commands ([[core-service-42](#core-service-42)] [[core-service-43](#core-service-43)] [[core-service-44](#core-service-44)] [[core-service-45](#core-service-45)] [[core-service-46](#core-service-46)] [[core-service-79](#core-service-79)]) and the dispatch stamp [[core-service-47](#core-service-47)] ([DR-035](../decisions/035-intent-ledger.md), [DR-036](../decisions/036-file-state-store.md)):
+
+| Field(s) | Content |
+| --- | --- |
+| `id` | the intent's identifier |
+| `projectId` | the owning project |
+| `text` | the staged Boss turn text; its first line is the display title |
+| `source` (`kind`, `ref`, `url`) | provenance — issue, PR, record, or chat, with reference and URL — absent when unsourced |
+| `rank` | the per-project lexicographic order key |
+| `afterId` | the single optional predecessor intent, of any project |
+| `createdAt` | the capture time |
+| `dispatched` (`sessionId`, `turnId`, `at`) | the dispatch stamp, re-written by a later dispatch |
+| `closedAt`, `closedAs` | the close time and verdict — `done` or `dropped` |
+
+- Within a local history, an act is never deleted or rewritten: an edit, move, link, dispatch, close, or remove appends, and the fold takes each field's latest act; an intent removed before it was worked, and one a remove act retired [[core-service-79](#core-service-79)], keep their acts in the log while every read excludes them ([DR-038](../decisions/038-history-is-done-work.md)).
+
+- Offline Git selection replaces a complete act log under the explicit whole-file rule [[storage-11](storage.md#storage-11)]; file-order folding does not merge divergent logs.
+
 ### Record Streaming
 
 #### core-service-7
@@ -245,6 +267,15 @@ While a session is live, when the embedded runtime emits a player record, the co
 - a trace naming no resolved player opens nothing, and a player record outside any open call carries no role;
 - a replayed record carries the same role the live stream carried [[core-service-10](#core-service-10)].
 
+### Historical Context
+
+#### core-service-80
+
+When serving a stored session, the core service shall resolve its immutable participant/settings/binding/graph context through Playbook's replay references [[1]] and expose that context over the protocol without loading the historical executable module:
+
+- absent legacy context or an unknown graph/context version is reported unavailable, never replaced with current settings or a guessed graph;
+- graph activity is derived from the session's trace, and current configuration changes do not alter prior history.
+
 ### Readiness
 
 #### core-service-9
@@ -257,27 +288,26 @@ When a client requests adapter readiness, the core service shall report one dedu
 
 #### core-service-10
 
-The core service shall persist each session as files in the shared session store as records occur — the session's record stream appended one record per line (hidden records included), beside its manifest and its project-binding sidecar, which also carries the Captain snapshot [[core-service-72](#core-service-72)] ([DR-036](../decisions/036-file-state-store.md)):
+The core service shall persist and replay sessions through Playbook's common manifest/stream contract [[1]], using the shared root and explicit overrides [[storage-1](storage.md#storage-1)] ([DR-045](../decisions/045-unified-session-storage.md)):
 
-- Where sessions have been persisted, a startup serves the stored sessions, turns, records, and usage over the protocol with the same content and record order as originally streamed, applying the same visibility filtering as live streaming [[core-service-8](#core-service-8)] — turns, titles, and usage totals folded from the stored stream, never separately stored.
-- Where a session was live at shutdown, the next startup reports that session as no longer live, its snapshot kept so it lists continuable [[core-service-32](#core-service-32)].
-- The synthesized visible failure record [[core-service-30](#core-service-30)] is persisted in the stream, so replay carries what live subscribers saw.
-- The stream is a token-free replay projection: provider resume tokens are stripped before a record is served or persisted, the session manifest being their only durable home ([DR-036](../decisions/036-file-state-store.md)).
-- Preserve valid opaque v1 objects, including unknown/headerless records, in history and sequence accounting without marking damage; presentation folds require a string `type` and finite numeric `timestamp`.
-- When a record cannot be durably appended, the record is still delivered and served from memory, no further stream write is attempted for that session, and the session's listing marks the stream incomplete after its last durable sequence — truncated history is never presented as complete.
-- A native stream with an unterminated tail, malformed record envelope, or broken sequence at startup persists the incomplete marker at the last contiguous valid sequence, preserving an earlier marker and leaving the stream unchanged, so continuation is refused [[core-service-73](#core-service-73)]; increasing records beyond a sequence gap remain readable for legacy imported history.
+- restart serves the same records and visibility filtering [[core-service-8](#core-service-8)], deriving turns, summaries and usage; liveness comes from runtime/leases rather than stored flags;
+- valid opaque v1 records, including unknown/headerless objects, remain in sequence/digest accounting; unsupported presentation is skipped without damage;
+- record-write failure preserves live presentation and durable recovery, marks the manifest's replay incomplete and refuses later continuation [[core-service-73](#core-service-73)]; a restart cannot clear the marker merely because the retained bytes parse;
+- a reader serves the valid complete prefix with the damaged boundary reported, without altering files during a read;
+- token-free presentation includes synthesized visible failures [[core-service-30](#core-service-30)]; provider hints never enter the portable stream or manifest;
+- historical participants, settings, bindings and graphs come from stored context [[core-service-80](#core-service-80)], not today's installed modules.
 
 #### core-service-60
 
-The core service shall serve every session present in the shared session store's directory — the directory the shared config's `sessions` key names, defaulting to the playbook CLI's own sessions directory ([DR-036](../decisions/036-file-state-store.md)) — whether found there at startup or written by another host while the service runs:
+The core service shall serve every session present in the shared session store's directory — the directory the shared config's `sessions` key names, defaulting to the shared home layout [[storage-1](storage.md#storage-1)] — whether found there at startup or written by another host while the service runs:
 
-- such a session binds to the registered project whose path is the session's recorded working directory, and lists non-live [[core-service-32](#core-service-32)] — read-only, never continued [[core-service-73](#core-service-73)] — with its records served per [[core-service-10](#core-service-10)]; a session matching no registered project is not listed;
+- session `cwd` resolves through local project bindings [[storage-6](storage.md#storage-6)]; resolved sessions list with shared continuation eligibility [[core-service-73](#core-service-73)], while unresolved sessions are reported unlisted;
 - a record beside no replay stream lists from its Boss journal: each Boss entry opens a turn with its prompt, each Captain reply follows it, and the record's own timestamps bound them ([DR-037](../decisions/037-playbook-12-adoption.md));
 - an arrival or change while the service runs is announced to subscribed clients as a session-state report, with `intents.changed` where a derived intent state can change [[core-service-51](#core-service-51)]; a record's disappearance is forgotten [[core-service-76](#core-service-76)];
 - a stream append also reaches that session's subscribers through the record visibility filter [[core-service-8](#core-service-8)], once per appended record, without waiting for directory activity to stop; a replacement history is served on the next history request;
 - each session is read independently from its complete newline-terminated stream prefix, so an unfinished final line waits for its newline and an unreadable manifest preserves its previous served history without hiding healthy neighbors;
 - preserve opaque records [[core-service-10](#core-service-10)]; summary times use first/last finite record timestamps, otherwise manifest creation/update times or zero;
-- registering a project [[core-service-4](#core-service-4)] lists the sessions the directory already holds for it, without waiting for a new record.
+- registration or rebinding rescans existing session paths [[storage-6](storage.md#storage-6)], without waiting for a new record.
 
 #### core-service-76
 
@@ -285,7 +315,7 @@ While the core service serves a session another host wrote [[core-service-60](#c
 
 #### core-service-65
 
-The core service shall write none of the files of a session another host wrote [[core-service-60](#core-service-60)] — their deletion at the user's request being the one exception [[core-service-70](#core-service-70)] — so per-session single-writer holds across hosts without coordination ([DR-036](../decisions/036-file-state-store.md)).
+The core service shall mutate a session from either interface only through Playbook's shared lease-bound lifecycle [[1]], retaining lease-free reads and never maintaining a host-specific manifest or recovery sidecar ([DR-045](../decisions/045-unified-session-storage.md)).
 
 #### core-service-61
 
@@ -338,31 +368,11 @@ The core package shall filter records by visibility [[core-service-8](#core-serv
 
 #### core-service-15
 
-The core package shall own the file state of [DR-036](../decisions/036-file-state-store.md) — the state root's registry, intent-act-log, preferences, and forge-cache files, and the per-session files it writes into the shared session store — defining each file kind with a version marker and applying forward migrations at startup before accepting client connections:
+The core package shall own Spex application files through the versioned encodings and root-lease writer contract [[storage-1](storage.md#storage-1)] [[storage-14](storage.md#storage-14)], using the staged migration before admitting clients [[storage-9](storage.md#storage-9)]:
 
-- When a migration fails, the core package stops serving and reports the failure, so a partially migrated root is never served.
-- The core package is the only writer of the Spex-owned files, exposing stored data solely over the protocol.
-- A released migration is never edited: a format change is a new migration, so files written by an earlier release open rather than failing on a field they have never seen.
-
-### Intent Storage
-
-#### core-service-52
-
-The core package shall hold intents in one per-project append-only act log of acts and provenance only — no state or status field, every visible state derived at read time by folding the acts [[core-service-49](#core-service-49)] — kept in the state root [[core-service-15](#core-service-15)] and appended solely by the intent commands ([[core-service-42](#core-service-42)] [[core-service-43](#core-service-43)] [[core-service-44](#core-service-44)] [[core-service-45](#core-service-45)] [[core-service-46](#core-service-46)] [[core-service-79](#core-service-79)]) and the dispatch stamp [[core-service-47](#core-service-47)] ([DR-035](../decisions/035-intent-ledger.md), [DR-036](../decisions/036-file-state-store.md)):
-
-| Field(s) | Content |
-| --- | --- |
-| `id` | the intent's identifier |
-| `projectId` | the owning project |
-| `text` | the staged Boss turn text; its first line is the display title |
-| `source` (`kind`, `ref`, `url`) | provenance — issue, PR, record, or chat, with reference and URL — absent when unsourced |
-| `rank` | the per-project lexicographic order key |
-| `afterId` | the single optional predecessor intent, of any project |
-| `createdAt` | the capture time |
-| `dispatched` (`sessionId`, `turnId`, `at`) | the dispatch stamp, re-written by a later dispatch |
-| `closedAt`, `closedAs` | the close time and verdict — `done` or `dropped` |
-
-- An act is never deleted or rewritten: an edit, move, link, dispatch, close, or remove appends, and the fold takes each field's latest act; an intent removed before it was worked, and one a remove act retired [[core-service-79](#core-service-79)], keep their acts in the log while every read excludes them ([DR-038](../decisions/038-history-is-done-work.md)).
+- session schemas and migrations remain Playbook-owned [[1]];
+- failed migration reports its cause and admits no writer to partially migrated data;
+- released migrations remain immutable; a format change adds a new migration.
 
 ### Runtime Composition
 
@@ -386,20 +396,19 @@ When a session is created, the core package shall instantiate the engagement hos
 
 #### core-service-67
 
-When a session is created for a project, the core package shall build one host construction capability per enabled schema-3 playbook over the project's git worktree — the repository operations loaded from the installed playbook package's own repository-effect module, the effect ledger kept in memory per session with one attempt per Boss turn, and the session's authority token under the root lease [[core-service-61](#core-service-61)] — and shall reconcile repository effects before each Boss turn ([DR-037](../decisions/037-playbook-12-adoption.md)):
+When creating or continuing a session, the core package shall obtain the shared Playbook host lifecycle and repository capabilities [[1]], backed by that session's lease and durable effect ledger rather than an in-memory replacement ([DR-045](../decisions/045-unified-session-storage.md)):
 
-- A project directory that is no git worktree fails session creation, naming the cause.
-- A reconciliation failure before a turn is delivered as a runtime error record and starts no turn.
-- The settlement hooks settle nothing durable: the sidecar's snapshot is the session's only record [[core-service-72](#core-service-72)], so the shell's abandonment clears its stack and no settlement is written.
+- a project that is not a Git worktree refuses before execution;
+- repository/effect reconciliation precedes each turn, and a failure starts no turn;
+- settlement and abandonment preserve the shared durable authority; no core-side snapshot can replace it.
 
 #### core-service-74
 
-When a session continues [[core-service-73](#core-service-73)], the core package shall build its new runtime as the playbook CLI continues its own sessions ([DR-042](../decisions/042-sessions-continue.md)):
+When a session continues, the core package shall restore through Playbook's shared lifecycle [[1]], preserving logical session, turn, trace, operation and journal identities while appending to the existing stream:
 
-- the fresh shell enters through the runtime's one init boundary as a restore of the snapshot, never an init;
-- the host effect ledger [[core-service-67](#core-service-67)] is seeded from the snapshot's, since the shell accepts a restore only when the two agree;
-- the runtime's turn ids — numbered from one per runtime — are offset past the session's stored turns before any record is persisted, served, or stamped onto an intent [[core-service-47](#core-service-47)];
-- the record sequence continues from the stored stream's last, so the turn appends to the same stream [[core-service-10](#core-service-10)].
+- a fresh runtime restores the saved state rather than reinitializing completed work;
+- the checkpoint's ledger must agree with the authoritative durable ledger before effects;
+- intent dispatch uses the continued logical turn ID [[core-service-47](#core-service-47)], without an independent host-owned counter offset.
 
 #### core-service-29
 
@@ -510,7 +519,7 @@ Where a fixture session — manifest naming a registered project's directory as 
 - leading, interspersed and trailing opaque v1 objects preserve history without inventing players, turns or failures; summary times stay finite even for wholly opaque streams [[core-service-60](#core-service-60)];
 - a fixture session whose working directory matches no registered project is absent from the listing [[core-service-60](#core-service-60)];
 - a fixture record with a Boss journal and no stream lists with the first Boss entry as its title, its Boss turns counted, and a history of turn starts, Captain replies, and turn finishes [[core-service-60](#core-service-60)];
-- every fixture file is byte-identical once the service stops, and no sidecar joins them [[core-service-65](#core-service-65)].
+- every fixture file is byte-identical once the service stops, and no sidecar joins them while only reads are requested [[core-service-65](#core-service-65)].
 
 #### core-service-71
 
@@ -522,9 +531,7 @@ Where fixture sessions another host wrote [[core-service-60](#core-service-60)] 
 
 #### core-service-77
 
-Where a session on the scripted fake adapter [[core-service-18](#core-service-18)] has completed a turn and ended, the test suite shall assert the continuation contract: the ended session's state report and listing say a message continues it [[core-service-32](#core-service-32)]; while a second session of the project is live, a submission to it is refused `busy` naming the way forward, and once that session ends the same submission continues it — reported live with its end time cleared [[core-service-34](#core-service-34)], its new turn numbered past the stored one, its records appended to the same stream in one ascending sequence [[core-service-74](#core-service-74)] [[core-service-10](#core-service-10)]; after a restart on the same root it lists continuable and continues again [[core-service-72](#core-service-72)]; and a session another host wrote and one whose stream is torn are refused with their reasons [[core-service-73](#core-service-73)]:
-
-- Where the core service runs with the installed playbook's real Captain shell [[core-service-69](#core-service-69)] and players whose results carry resume tokens, the suite shall assert that the sidecar carries no token after the turn and the snapshot's conversation reseeds from its journal [[core-service-72](#core-service-72)], that the continued turn round-trips the Captain's reply with the effect ledger unchanged [[core-service-74](#core-service-74)], and that a roster change in the config makes the next submission fail naming the drift and offering a new session, which the project then accepts [[core-service-73](#core-service-73)].
+When the integration suite ends and restarts a shared-store session, it shall verify that either a desktop- or CLI-created supported checkpoint lists continuable [[core-service-32](#core-service-32)], continues with the same identities and stream [[core-service-74](#core-service-74)], and persists recovery without provider tokens [[core-service-72](#core-service-72)]; active leases/project sessions, history-only recovery, damaged digests, uncertain work, missing bindings and path/config drift shall refuse before a turn or intent stamp [[core-service-73](#core-service-73)].
 
 #### core-service-63
 
@@ -613,3 +620,11 @@ Where the core service attaches to a test-supplied HTTP server [[core-service-1]
 #### core-service-28
 
 Where the config references one adapter from several positions — as the captain and as a session player, including a hand-written scalar adapter id — the test suite shall assert that readiness reporting includes exactly one entry for that adapter [[core-service-26](#core-service-26)], naming each referencing position, marked per the adapter readiness rules with the unmet requirement named when the adapter is not ready [[core-service-9](#core-service-9)].
+
+#### core-service-81
+
+When the integration suite opens recorded Captain/player work after removing its playbook modules and changing current configuration, it shall verify historical context and graphs are still served, activity derives from recorded traces, and absent/unknown context is reported without substitution [[core-service-80](#core-service-80)].
+
+## References
+
+[1]: https://github.com/sublang-ai/playbook/blob/main/specs/packages/session-storage.md "Shared session format and host lifecycle"
