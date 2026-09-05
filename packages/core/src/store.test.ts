@@ -3,11 +3,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import Database from "better-sqlite3";
+import { projectCaptainSessionStructure, type SessionExecutionProjection, type SessionFreshBoundary } from "@sublang/playbook/session-store";
 
 import { StateRootHeldError, Store } from "./store.js";
 import type { SessionInfo, TmuxPlayRecord } from "./protocol.js";
@@ -19,7 +20,7 @@ function tempRoot(): string {
 function sampleSession(store: Store): SessionInfo {
   const project = store.registerProject("/tmp/proj", "proj", 1000);
   const session: SessionInfo = {
-    id: "s1",
+    id: "71000000-0000-4000-8000-000000000001",
     projectId: project.id,
     projectPath: project.path,
     createdAt: 2000,
@@ -34,6 +35,34 @@ function sampleSession(store: Store): SessionInfo {
   return session;
 }
 
+const SESSION = "71000000-0000-4000-8000-000000000001";
+const execution: SessionExecutionProjection = {
+  schemaVersion: 2,
+  captain: { adapter: "claude", model: { kind: "provider-default" }, effort: { kind: "provider-default" }, permissions: { mode: "auto" } },
+  players: [{ id: "dev.coder", adapter: "codex", model: { kind: "provider-default" }, effort: { kind: "provider-default" }, permissions: {} }],
+  catalog: { code: { id: "code", from: "@sublang/playbook/code/registry", manifestCommand: "code", command: "code", intent: "Implement a change", artifactSchema: 3, requiredRoleIds: ["coder"], concurrentRoleSets: [], roles: { coder: { playerId: "dev.coder", model: { kind: "provider-default" }, effort: { kind: "provider-default" } } }, options: {} } },
+};
+async function sharedSession(store: Store) {
+  store.registerProject("/tmp/proj", "proj", 1000);
+  const shared = store.sessionStore(); await shared.prepare();
+  const lease = await shared.acquire(SESSION);
+  const structure = projectCaptainSessionStructure(execution);
+  const captainId = "71000000-0000-4000-8000-000000000007";
+  const ledger = { schemaVersion: 1, revision: 0, boundaries: [], logicalOperations: [] };
+  const state = { value: "routing", activeStateIds: ["routing"], tags: ["playbook.parked"], status: "active", quiescent: true, stateId: "routing" };
+  const snapshot = {
+    schemaVersion: 4,
+    captain: {
+      sessionId: captainId, agent: structure.captain, conversation: { kind: "unopened" },
+      runtime: { schemaVersion: 4, playbookId: "captain", machine: { value: "routing", status: "active" }, roleResumeTokens: {},
+        sequences: { trace: 0, turn: 0, judgeCall: 0, playerCall: 0, playbookCall: 0, captainCall: 0 }, state, pendingBossQuestions: [], effectLedger: ledger },
+    },
+    playerSessions: Object.fromEntries(structure.players.map(({ id, ...agent }) => [id, agent])), issuedSessionIds: [captainId], sequences: { turn: 0, journal: 0 }, journal: [], effectLedger: ledger, mode: "chat",
+  } as unknown as SessionFreshBoundary["snapshot"];
+  await lease.initializeSettledWithPredecessor({ cwd: "/tmp/proj", structuralProjection: structure, executionProjection: execution, snapshot });
+  return lease;
+}
+
 test("projects register idempotently by path and can be removed", () => {
   const store = new Store({ dir: tempRoot() });
   const a = store.registerProject("/tmp/x", "x", 1);
@@ -45,10 +74,10 @@ test("projects register idempotently by path and can be removed", () => {
   store.close();
 });
 
-test("records persist with order and hidden flags surviving reopen", () => {
+test("records persist through the shared lifecycle with order and hidden flags", async () => {
   const dir = tempRoot();
   const store = new Store({ dir });
-  sampleSession(store);
+  const lease = await sharedSession(store);
   const visible: TmuxPlayRecord = {
     type: "captain_status",
     turnId: 1,
@@ -62,68 +91,57 @@ test("records persist with order and hidden flags surviving reopen", () => {
     prompt: "route this",
     visibility: "hidden",
   } as TmuxPlayRecord;
-  store.appendRecord("s1", 1, visible);
-  store.appendRecord("s1", 2, hidden);
+  await lease.append(visible);
+  await lease.append(hidden);
+  await lease.release();
   store.close();
 
   const reopened = new Store({ dir });
-  const filtered = reopened.getRecords("s1");
+  await reopened.initializeSessions();
+  const filtered = reopened.getRecords("71000000-0000-4000-8000-000000000001");
   assert.deepEqual(
     filtered.map((r) => r.seq),
-    [1],
-  );
-  const all = reopened.getRecords("s1", { includeHidden: true });
-  assert.deepEqual(
-    all.map((r) => r.seq),
     [1, 2],
   );
-  assert.equal(all[1].record.type, "captain_prompt");
-  assert.equal(reopened.maxSeq("s1"), 2);
+  const all = reopened.getRecords("71000000-0000-4000-8000-000000000001", { includeHidden: true });
+  assert.deepEqual(
+    all.map((r) => r.seq),
+    [1, 2, 3],
+  );
+  assert.equal(all[2].record.type, "captain_prompt");
+  assert.equal(reopened.maxSeq(SESSION), 3);
   reopened.close();
 });
 
-test("sessions live at shutdown are recovered as not live", () => {
+test("liveness comes from the host while shared recovery survives restart", async () => {
   const dir = tempRoot();
   const store = new Store({ dir });
-  sampleSession(store);
-  store.close();
-
-  const reopened = new Store({ dir });
-  reopened.markAllSessionsNotLive();
-  const sessions = reopened.listSessions();
-  assert.equal(sessions.length, 1);
-  assert.equal(sessions[0].live, false);
-  assert.equal(sessions[0].projectPath, "/tmp/proj");
-  reopened.close();
-});
-
-test("DR-042: an ended session with a snapshot and a whole stream lists continuable, across a restart", () => {
-  const dir = tempRoot();
-  const store = new Store({ dir });
-  const session = sampleSession(store);
-  assert.equal(store.listSessions()[0].continuable, undefined, "live: not continuable");
-  store.endSession("s1", 3000);
-  assert.equal(store.listSessions()[0].continuable, undefined, "no snapshot yet");
-  store.setSnapshot("s1", { v: 1 });
+  const lease = await sharedSession(store);
+  await lease.release();
+  await store.initializeSessions();
   assert.equal(store.listSessions()[0].continuable, true);
-  store.reopenSession("s1", session.players);
+  store.reopenSession(SESSION, []);
   assert.equal(store.listSessions()[0].live, true);
-  assert.equal(store.listSessions()[0].endedAt, null);
-  assert.equal(store.listSessions()[0].continuable, undefined, "live again");
+  assert.equal(store.listSessions()[0].continuable, undefined);
   store.close();
 
   const reopened = new Store({ dir });
-  reopened.markAllSessionsNotLive();
-  assert.equal(reopened.getSnapshot("s1")?.v, 1, "the snapshot survives in the sidecar");
+  await reopened.initializeSessions();
+  assert.equal(reopened.listSessions()[0].live, false);
   assert.equal(reopened.listSessions()[0].continuable, true);
+  assert.equal(reopened.listSessions()[0].projectPath, "/tmp/proj");
+  assert.equal(existsSync(join(dir, "sessions", `${SESSION}.spex.json`)), false);
+  const before = readFileSync(join(dir, "sessions", `${SESSION}.json`));
+  await reopened.refreshSession(SESSION);
+  assert.deepEqual(readFileSync(join(dir, "sessions", `${SESSION}.json`)), before);
   reopened.close();
 });
 
 test("usage totals aggregate per session", () => {
-  const store = new Store({ dir: tempRoot() });
+  const store = new Store();
   sampleSession(store);
   store.addUsage({
-    sessionId: "s1",
+    sessionId: "71000000-0000-4000-8000-000000000001",
     turnId: 1,
     actorId: "dev.coder",
     inputTokens: 100,
@@ -134,7 +152,7 @@ test("usage totals aggregate per session", () => {
     at: 1,
   });
   store.addUsage({
-    sessionId: "s1",
+    sessionId: "71000000-0000-4000-8000-000000000001",
     turnId: 1,
     actorId: "captain",
     inputTokens: 10,
@@ -147,7 +165,7 @@ test("usage totals aggregate per session", () => {
   // The provenance of every contributing entry travels with the sum,
   // so a total mixing a provider's bill with an agent's guess cannot be
   // presented as if the provider reported all of it (DR-032).
-  assert.deepEqual(store.sessionUsage("s1"), {
+  assert.deepEqual(store.sessionUsage("71000000-0000-4000-8000-000000000001"), {
     inputTokens: 110,
     outputTokens: 45,
     toolUses: 3,
@@ -169,7 +187,7 @@ test("prefs round-trip JSON values", () => {
 test("core-service-32: session.list carries each session's conversation summary", () => {
   // The rail's rows are only scannable if the listing carries scent:
   // the session's own first words, its size, and whether it ended badly.
-  const store = new Store({ dir: tempRoot() });
+  const store = new Store();
   const project = store.registerProject("/tmp/proj", "proj", 1000);
   const base = {
     projectId: project.id,
@@ -237,7 +255,7 @@ test("core-service-61: a held state root refuses a second store, and releases on
   second.close();
 });
 
-test("core-service-64: a legacy SQLite store imports once, rows served from files", () => {
+test("core-service-64: a legacy SQLite store imports once, rows served from files", async () => {
   // A pre-DR-036 release left a spex.db behind. Its rows must serve
   // identically from the file state, with turns, titles, and usage
   // folded from the imported record stream — and the legacy file must
@@ -289,18 +307,18 @@ test("core-service-64: a legacy SQLite store imports once, rows served from file
       closed_at INTEGER, closed_as TEXT
     );
     INSERT INTO meta VALUES ('schema_version', '3');
-    INSERT INTO projects VALUES ('p1', '/tmp/proj', 'proj', 1);
-    INSERT INTO sessions VALUES ('s1', 'p1', 1, NULL, 1, '[]', '[]');
-    INSERT INTO prefs VALUES ('viewed:s1', '1');
-    INSERT INTO intents VALUES ('i1', 'p1', 'Ship it', NULL, NULL, NULL,
-      'i', NULL, 5, 's1', 1, 10, NULL, NULL);
+    INSERT INTO projects VALUES ('71000000-0000-4000-8000-000000000004', '/tmp/proj', 'proj', 1);
+    INSERT INTO sessions VALUES ('71000000-0000-4000-8000-000000000001', '71000000-0000-4000-8000-000000000004', 1, NULL, 1, '[]', '[]');
+    INSERT INTO prefs VALUES ('viewed:71000000-0000-4000-8000-000000000001', '1');
+    INSERT INTO intents VALUES ('71000000-0000-4000-8000-000000000002', '71000000-0000-4000-8000-000000000004', 'Ship it', NULL, NULL, NULL,
+      'i', NULL, 5, '71000000-0000-4000-8000-000000000001', 1, 10, NULL, NULL);
   `);
   const insert = legacy.prepare(
     "INSERT INTO records (session_id, seq, turn_id, type, hidden, timestamp, payload_json, role) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
   );
   insert.run(
-    "s1",
+    "71000000-0000-4000-8000-000000000001",
     1,
     1,
     "turn_started",
@@ -314,11 +332,11 @@ test("core-service-64: a legacy SQLite store imports once, rows served from file
     }),
     null,
   );
-  insert.run("s1", 2, 1, "player_event", 0, 30, JSON.stringify(doneEvent), "coder");
+  insert.run("71000000-0000-4000-8000-000000000001", 2, 1, "player_event", 0, 30, JSON.stringify(doneEvent), "coder");
   // The pre-0.22 flat usage shape lives in real stored streams; the
   // fold must read it too.
   insert.run(
-    "s1",
+    "71000000-0000-4000-8000-000000000001",
     4,
     1,
     "captain_event",
@@ -338,7 +356,7 @@ test("core-service-64: a legacy SQLite store imports once, rows served from file
     null,
   );
   insert.run(
-    "s1",
+    "71000000-0000-4000-8000-000000000001",
     3,
     1,
     "turn_finished",
@@ -351,33 +369,34 @@ test("core-service-64: a legacy SQLite store imports once, rows served from file
   const legacyBytes = readFileSync(legacyDbPath);
 
   const store = new Store({ dir: root, legacyDbPath });
+  await store.initializeSessions();
   // A session live when the legacy store last closed is not live now.
-  const session = store.listSessions().find((entry) => entry.id === "s1");
+  const session = store.listSessions().find((entry) => entry.id === "71000000-0000-4000-8000-000000000001");
   assert.equal(session?.live, false);
   assert.equal(session?.title, "ship the import");
   assert.equal(session?.turns, 1);
   // Usage folds from the imported stream (core-service-10), across
   // both payload generations.
-  assert.deepEqual(store.sessionUsage("s1"), {
+  assert.deepEqual(store.sessionUsage("71000000-0000-4000-8000-000000000001"), {
     inputTokens: 100,
     outputTokens: 15,
     toolUses: 3,
     totalCostUsd: 0.25,
     costSources: ["provider-reported"],
   });
-  assert.equal(store.getRecords("s1")[1]?.role, "coder");
-  assert.equal(store.getPref("viewed:s1"), 1);
-  assert.equal(store.getIntent("i1")?.dispatched?.turnId, 1);
+  assert.equal(store.getRecords("71000000-0000-4000-8000-000000000001")[1]?.role, "coder");
+  assert.equal(store.getPref("viewed:71000000-0000-4000-8000-000000000001"), 1);
+  assert.equal(store.getIntent("71000000-0000-4000-8000-000000000002")?.dispatched?.turnId, 1);
   store.close();
 
   // The legacy file is untouched, and a second startup imports nothing
   // twice: rows written since are not clobbered by a re-import.
   assert.deepEqual(readFileSync(legacyDbPath), legacyBytes);
   const reopened = new Store({ dir: root, legacyDbPath });
-  reopened.setPref("viewed:s1", 4);
+  reopened.setPref("viewed:71000000-0000-4000-8000-000000000001", 4);
   reopened.close();
   const third = new Store({ dir: root, legacyDbPath });
-  assert.equal(third.getPref("viewed:s1"), 4);
+  assert.equal(third.getPref("viewed:71000000-0000-4000-8000-000000000001"), 4);
   assert.ok(existsSync(legacyDbPath));
   third.close();
 });
@@ -401,8 +420,8 @@ test("a second shell's legacy import merges into the root, clobbering nothing", 
     `);
     db.close();
   };
-  seed(join(dir, "desktop.db"), "p-desktop", "/tmp/desktop-proj");
-  seed(join(dir, "server.db"), "p-server", "/tmp/server-proj");
+  seed(join(dir, "desktop.db"), "71000000-0000-4000-8000-000000000005", "/tmp/desktop-proj");
+  seed(join(dir, "server.db"), "71000000-0000-4000-8000-000000000006", "/tmp/server-proj");
 
   const first = new Store({ dir: root, legacyDbPath: join(dir, "desktop.db") });
   first.registerProject("/tmp/new-work", "new-work", 2);
@@ -419,38 +438,20 @@ test("a second shell's legacy import merges into the root, clobbering nothing", 
   second.close();
 });
 
-test("a torn intent-log tail heals on load, so a later append cannot brick startup", () => {
-  const dir = tempRoot();
-  const store = new Store({ dir });
+test("a torn intent tail remains readable but refuses further writes without changing memory", () => {
+  const dir = tempRoot(); const store = new Store({ dir });
   const project = store.registerProject("/tmp/heal", "heal", 1);
-  store.addIntent({
-    id: "i1",
-    projectId: project.id,
-    text: "First",
-    rank: "i",
-    createdAt: 1,
-  });
+  const firstId = "71000000-0000-4000-8000-000000000002";
+  const nextId = "71000000-0000-4000-8000-000000000003";
+  store.addIntent({ id: firstId, projectId: project.id, text: "First", rank: "i", createdAt: 1 });
   store.close();
-
-  // A crash mid-append leaves a torn tail with no trailing newline.
   const log = join(dir, "intents", `${project.id}.jsonl`);
-  writeFileSync(log, readFileSync(log, "utf8") + '{"v":1,"act":"edit","id":"i1","te');
-
-  const healed = new Store({ dir });
-  healed.addIntent({
-    id: "i2",
-    projectId: project.id,
-    text: "Second",
-    rank: "r",
-    createdAt: 2,
-  });
-  healed.close();
-
+  const damaged = readFileSync(log, "utf8") + '{"v":1,"act":"edit"'; writeFileSync(log, damaged);
   const reopened = new Store({ dir });
-  assert.deepEqual(
-    reopened.listOpenIntents().map((intent) => intent.id),
-    ["i1", "i2"],
-  );
+  assert.deepEqual(reopened.listOpenIntents().map((intent) => intent.id), [firstId]);
+  assert.throws(() => reopened.addIntent({ id: nextId, projectId: project.id, text: "Second", rank: "r", createdAt: 2 }), /incomplete final act/);
+  assert.equal(reopened.getIntent(nextId), undefined);
+  assert.equal(readFileSync(log, "utf8"), damaged);
   reopened.close();
 });
 
@@ -478,18 +479,18 @@ test("an unreadable root lock fails closed rather than letting a second core in"
   store.close();
 });
 
-test("the stream is a token-free projection: resume tokens never reach memory or disk", () => {
+test("shared replay remains token-free in memory and across restart", async () => {
   const dir = tempRoot();
   const store = new Store({ dir });
-  sampleSession(store);
-  store.appendRecord("s1", 1, {
+  const lease = await sharedSession(store);
+  await lease.append({
     type: "player_finished",
     turnId: 1,
     timestamp: 10,
     playerId: "dev.coder",
     result: { status: "ok", finalText: "done", resumeToken: "sess-abc" },
   } as unknown as TmuxPlayRecord);
-  store.appendRecord("s1", 2, {
+  await lease.append({
     type: "captain_telemetry",
     turnId: 1,
     timestamp: 11,
@@ -502,88 +503,85 @@ test("the stream is a token-free projection: resume tokens never reach memory or
       status: "ok",
     },
   } as unknown as TmuxPlayRecord);
-  store.appendRecord("s1", 3, {
+  await lease.append({
     type: "captain_telemetry",
     turnId: 1,
     timestamp: 12,
     topic: "playbook.trace",
     payload: { type: "player.call.started", resume: false },
   } as unknown as TmuxPlayRecord);
+  await lease.release();
   store.close();
 
   const reopened = new Store({ dir });
-  const text = readFileSync(join(dir, "sessions", "s1.records.jsonl"), "utf8");
+  await reopened.initializeSessions();
+  const text = readFileSync(join(dir, "sessions", "71000000-0000-4000-8000-000000000001.records.jsonl"), "utf8");
   assert.ok(!text.includes("sess-abc") && !text.includes("sess-def"));
-  const serialized = JSON.stringify(reopened.getRecords("s1"));
+  const serialized = JSON.stringify(reopened.getRecords("71000000-0000-4000-8000-000000000001"));
   assert.ok(!serialized.includes("resumeToken") && !serialized.includes("sess-abc"));
   // `resume: false` is semantics, not a token, and survives the strip.
-  const trace = reopened.getRecords("s1")[2].record as unknown as {
+  const trace = reopened.getRecords("71000000-0000-4000-8000-000000000001")[3].record as unknown as {
     payload: { resume?: unknown };
   };
   assert.equal(trace.payload.resume, false);
   reopened.close();
 });
 
-test("a lease-free records read serves the newline-terminated prefix and mutates nothing", () => {
+test("a lease-free shared read serves only the complete prefix and mutates nothing", async () => {
   const dir = tempRoot();
   const store = new Store({ dir });
-  sampleSession(store);
-  store.appendRecord("s1", 1, {
+  const lease = await sharedSession(store);
+  await lease.append({
     type: "captain_status",
     turnId: 1,
     timestamp: 10,
     message: "ok",
   } as TmuxPlayRecord);
+  await lease.release();
   store.close();
 
   // A torn tail, as a crashed writer leaves it.
-  const file = join(dir, "sessions", "s1.records.jsonl");
+  const file = join(dir, "sessions", "71000000-0000-4000-8000-000000000001.records.jsonl");
   const damaged = readFileSync(file, "utf8") + '{"v":1,"seq":2,"rec';
   writeFileSync(file, damaged);
 
   const reopened = new Store({ dir });
+  await reopened.initializeSessions();
   assert.deepEqual(
-    reopened.getRecords("s1").map((r) => r.seq),
-    [1],
+    reopened.getRecords("71000000-0000-4000-8000-000000000001").map((r) => r.seq),
+    [1, 2],
   );
   assert.equal(readFileSync(file, "utf8"), damaged, "the reader rewrites nothing");
   reopened.close();
 });
 
-test("a failed stream append latches incomplete instead of killing the turn", () => {
-  const dir = tempRoot();
-  const store = new Store({ dir });
-  sampleSession(store);
-  store.appendRecord("s1", 1, {
-    type: "captain_status",
-    turnId: 1,
-    timestamp: 10,
-    message: "durable",
-  } as TmuxPlayRecord);
-  // Make the records file unappendable: a directory in its place.
-  const file = join(dir, "sessions", "s1.records.jsonl");
-  rmSync(file);
-  mkdirSync(file);
-  store.appendRecord("s1", 2, {
-    type: "captain_status",
-    turnId: 1,
-    timestamp: 11,
-    message: "memory-only",
-  } as TmuxPlayRecord);
-  // Live serving stays complete; the listing says the stream is not.
-  assert.deepEqual(
-    store.getRecords("s1").map((r) => r.seq),
-    [1, 2],
-  );
-  assert.equal(store.describeSession("s1")?.streamIncompleteAfterSeq, 1);
-  store.close();
-
-  rmSync(file, { recursive: true, force: true });
-  const reopened = new Store({ dir });
-  assert.equal(
-    reopened.describeSession("s1")?.streamIncompleteAfterSeq,
-    1,
-    "the latch survives a restart on the sidecar",
-  );
+test("shared stream failure preserves the incomplete marker across Store restart", async () => {
+  const dir = tempRoot(); const store = new Store({ dir });
+  const lease = await sharedSession(store);
+  await lease.append({ type: "captain_status", turnId: 1, timestamp: 10, message: "durable" });
+  const file = join(dir, "sessions", `${SESSION}.records.jsonl`);
+  const prefix = readFileSync(file);
+  chmodSync(file, 0o644);
+  await assert.rejects(() => lease.append({ type: "captain_status", turnId: 1, timestamp: 11, message: "memory-only" }));
+  chmodSync(file, 0o600);
+  assert.equal(lease.streamStatus().incomplete, true);
+  await lease.release(); store.close();
+  assert.deepEqual(readFileSync(file), prefix);
+  const reopened = new Store({ dir }); await reopened.initializeSessions();
+  assert.equal(reopened.describeSession(SESSION)?.streamIncompleteAfterSeq, 1, "failure retains the last fsynced checkpoint, not merely readable bytes");
+  assert.equal(reopened.describeSession(SESSION)?.continuable, undefined);
+  assert.deepEqual(reopened.getRecords(SESSION).map((record) => record.seq), [1, 2]);
   reopened.close();
+});
+
+
+test("unsupported or damaged migration metadata stays unchanged and releases the home lease", () => {
+  for (const bytes of ['{"version":42}', '{"version":1,"extra":true}', 'null', '{broken']) {
+    const dir = tempRoot(); mkdirSync(dir, { recursive: true });
+    const file = join(dir, "meta.json"); writeFileSync(file, bytes);
+    assert.throws(() => new Store({ dir }));
+    assert.equal(readFileSync(file, "utf8"), bytes);
+    assert.equal(existsSync(join(dir, ".lock")), false);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
