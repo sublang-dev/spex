@@ -100,12 +100,13 @@ When a client requests the session list, the core service shall reply with every
 
 - each entry carries the session's resolved project, creation and end times, and liveness; host of origin is not an admission condition;
 - each entry says whether a Boss message continues it, using the shared checkpoint, replay and execution checks [[core-service-73](#core-service-73)], with a reason when history-only;
+- each uncertain entry carries `recovery: {state: "uncertain", input}` with the exact saved input; uncertainty is never reported as normal continuability;
 - each entry carries a title — the first Boss turn's text — absent when the session held no turn;
 - each entry carries its turn count and whether it ended holding a failure record.
 
 #### core-service-34
 
-When the core service reports a session's state to subscribed clients — at each turn's start and end, when the session ends, and when a message continues it [[core-service-73](#core-service-73)] — the report shall carry that session's conversation summary as the listing carries it [[core-service-32](#core-service-32)] ([DR-029](../decisions/029-session-history-home.md)), never the summary the session was created with:
+When the core service reports a session's state to subscribed clients — at each turn's start and end, when the session ends, and when a message continues it [[core-service-73](#core-service-73)], and after recovery [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)] — the report shall carry that session's conversation summary as the listing carries it [[core-service-32](#core-service-32)] ([DR-029](../decisions/029-session-history-home.md)), never the summary the session was created with:
 
 - A session is named from the turn that starts, not the turn that finishes, so a running session is never listed as having said nothing.
 
@@ -126,7 +127,8 @@ While a session is ended, when a client submits Boss text for it, the core servi
 | --- | --- |
 | Another session of the project is live, or a session lease is active | `busy`, naming the holder or session to end |
 | Unsupported recovery, no checkpoint, incomplete stream or digest mismatch | `invalid_request`, history-only with the failing condition |
-| Uncertain work or unresolved repository effects | `invalid_request`, reconcile the stored work before continuation |
+| Uncertain work | `invalid_request`, use explicit Retry or Discard [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)] |
+| Unresolved repository effects | `invalid_request`, reconcile the stored work before continuation |
 | Missing/ambiguous project binding | `invalid_request`, bind an existing project identity first |
 | Changed checkpoint repository/module paths | `invalid_request`, relocation unsupported; history remains readable |
 | Missing or invalid config | `invalid_config`, as for creation |
@@ -137,7 +139,24 @@ While a session is ended, when a client submits Boss text for it, the core servi
 
 #### core-service-6
 
-While a boss turn is active on a session, when a client requests an abort for that session, the core service shall abort the active turn, stream the turn-aborted record to subscribed clients, and accept a new Boss submission for that session afterwards.
+While a boss turn is active on a session, when a client requests an abort for that session, the core service shall abort the active turn, stream the turn-aborted record to subscribed clients, and admit further input only after the shared lifecycle establishes a settled checkpoint, otherwise reporting uncertainty [[core-service-32](#core-service-32)].
+
+#### core-service-82
+
+When a client sends `session.retry` with only a `sessionId`, the core shall retry that session's uncertain turn through Playbook's shared lifecycle [[1]] under the same project and session admission checks as continuation [[core-service-73](#core-service-73)] ([DR-047](../decisions/047-explicit-session-recovery.md)):
+
+- acquire the exclusive session lease and re-read the saved uncertainty before any effects;
+- reconcile repository evidence, restore the saved checkpoint and exact attempted configuration, and retry the recorded input without creating another intent dispatch;
+- reject a non-uncertain session or unsafe recovery with its cause, starting no replacement turn;
+- publish records and the resulting session state, retaining uncertainty if the attempt does not settle.
+
+#### core-service-83
+
+When a client sends `session.discard` with only a `sessionId`, the core shall discard that session's uncertain attempt through Playbook's shared lifecycle [[1]] under its exclusive lease, without loading configuration, modules or agents ([DR-047](../decisions/047-explicit-session-recovery.md)):
+
+- refuse live or unprovably owned sessions and any attempt whose effect ledger has advanced;
+- restore the exact preceding settled checkpoint, or remove a never-settled fresh session when Playbook authorizes removal;
+- publish the restored summary or session removal and refreshed intent state; a refusal preserves evidence and reports its cause.
 
 ### Intent Ledger
 
@@ -624,6 +643,16 @@ Where the config references one adapter from several positions — as the captai
 #### core-service-81
 
 When the integration suite opens recorded Captain/player work after removing its playbook modules and changing current configuration, it shall verify historical context and graphs are still served, activity derives from recorded traces, and absent/unknown context is reported without substitution [[core-service-80](#core-service-80)].
+
+### core-service-84
+
+When an integration suite interrupts CLI-created and desktop-created sessions and recovers them through core commands, it shall verify explicit recovery [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)]:
+
+- listing and broadcasts expose the saved input and disable ordinary continuation [[core-service-32](#core-service-32)] [[core-service-34](#core-service-34)];
+- Retry reuses saved configuration and input, preserves logical identities and intent dispatch, and refuses unsafe reconciliation;
+- Discard restores the prior checkpoint or removes a fresh attempt without loading agents, and ledger advancement refuses without evidence loss;
+- competing leases and repeated requests start no duplicate turn;
+- aborted turns require recovery whenever the shared checkpoint remains uncertain [[core-service-6](#core-service-6)].
 
 ## References
 

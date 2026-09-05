@@ -122,7 +122,7 @@ The Boss composer shall accept free text and `/`-prefixed command text, be the o
 
 - while no turn is active, a submission dispatches without queueing, the primary control reading "Send";
 - while a turn is active, a submission queues with a visible queued indicator until the queued submission is dispatched, the primary control reading "Send next" ([DR-041](../decisions/041-chrome-that-fits.md));
-- when the active turn ends, the queued submission dispatches;
+- when the active turn settles, the queued submission dispatches; uncertainty holds the queue until explicit recovery [[run-view-110](#run-view-110)];
 - the primary control's tooltip names its keys — Enter sends, Shift+Enter adds a line — and, while a turn is active, opens by saying the message sends when this turn ends.
 
 #### run-view-106
@@ -230,9 +230,20 @@ When the user opens the captain identity's editor control (or another agent's ed
 
 When an ended session is opened [[run-view-68](#run-view-68)], the run view shall show a loading note while its stored transcript loads and, once it is shown, an ended notice whose "New session" control starts a new session for the same project — nothing the user produced becomes unreachable ([DR-009](../decisions/009-at-hand-interaction.md)):
 
-- for a session the core lists as continuable ([DR-042](../decisions/042-sessions-continue.md)) the notice reads "Ended · a message continues it" above the enabled composer; otherwise it reads "Ended — this session can't be continued" in the composer's place;
+- an uncertain session shows recovery controls [[run-view-110](#run-view-110)];
+- for any other session the core lists as continuable ([DR-042](../decisions/042-sessions-continue.md)) the notice reads "Ended · a message continues it" above the enabled composer; otherwise it reads "Ended — this session can't be continued" in the composer's place;
 - the notice wraps its control under its words when its pane is too narrow for both ([DR-041](../decisions/041-chrome-that-fits.md));
 - when the transcript fails to load, the run view says so and offers a retry that reloads it — a failed load never presents as an empty run.
+
+#### run-view-110
+
+While a stored session is uncertain, the run view shall show "Interrupted turn" with the saved input and explicit Retry and Discard controls using the core's recovery commands [[core-service-82](core-service.md#core-service-82)] [[core-service-83](core-service.md#core-service-83)] ([DR-047](../decisions/047-explicit-session-recovery.md)):
+
+- normal submission and queued sends remain blocked; drafts and queued input remain available;
+- Retry confirms that it uses the saved input and configuration after checking completed work;
+- Discard confirms that it restores the preceding checkpoint only if no effects were added, or removes a fresh session;
+- confirmation focuses Cancel, Escape cancels, and pending or disconnected controls are disabled;
+- success follows the reported state in place; refusal shows its cause with the transcript and draft preserved.
 
 #### run-view-34
 
@@ -650,6 +661,16 @@ The pane manager shall key each pane by its player id [[run-view-7](#run-view-7)
 The start view shall obtain projects, playbooks, captain identity, and readiness exclusively through existing protocol commands and broadcasts, detecting the native picker by feature-testing the shell bridge ([DR-008](../decisions/008-native-shell-bridge.md)) and falling back to manual path entry when the bridge is absent so the identical build serves browser deployments.
 
 ## Verification
+
+### run-view-111
+
+When a browser journey opens an interrupted CLI-created session, it shall verify the recovery controls [[run-view-110](#run-view-110)]:
+
+- the saved input is visible, submission is blocked, and confirmation supports keyboard cancellation;
+- Retry sends only the session ID and displays the resulting records;
+- Discard refusal preserves the error, transcript and draft; successful discard shows the restored state or closes the removed session;
+- pending requests cannot be submitted twice, and disconnected controls cannot dispatch.
+
 
 ### Fixture Replay Coverage
 

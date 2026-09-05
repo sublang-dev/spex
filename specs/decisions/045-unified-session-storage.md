@@ -6,6 +6,7 @@
 ## Status
 
 Accepted (2026-09-05).
+Amended by [DR-047](047-explicit-session-recovery.md) for desktop uncertain-turn recovery.
 Amends:
 
 - [DR-036](036-file-state-store.md): storage ownership, default locations, local data and Git synchronization.

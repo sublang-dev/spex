@@ -5,7 +5,7 @@
 
 ## Status
 
-Planned; implementation awaits separate owner authorization.
+In progress; implementation and public releases authorized (2026-09-05).
 
 ## Intent
 
@@ -32,6 +32,9 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 9. Add pre-reopen validation and viewed-marker reset; verify invalid ledgers and orphan preservation.
 10. Serve stored context over the protocol; verify history without installed modules.
 11. Render stored context in run views; verify graph stability after configuration changes.
+12. Expose shared Retry/Discard commands and uncertainty summaries; verify CLI-created recovery through desktop.
+13. Add recovery controls and confirmations; verify saved-input retry, discard refusal and draft preservation.
+14. Run integrated release acceptance and publish the coordinated releases.
 
 ## Verification
 
