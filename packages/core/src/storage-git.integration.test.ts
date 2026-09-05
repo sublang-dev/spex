@@ -96,3 +96,18 @@ test("the documented entry point operates on the chosen home and protective Git 
   assert.deepEqual(result, []);
   rmSync(home, { recursive: true, force: true });
 });
+
+test("unknown session versions stay local and cannot enter a selected portable tree", async () => {
+  const { home, project } = setup(); const id = randomUUID();
+  const file = `sessions/${id}.json`;
+  const bytes = JSON.stringify({ schemaVersion: 99, sessionId: id, cwd: project.path, future: "opaque" });
+  writeFileSync(join(home, file), bytes, { mode: 0o600 });
+  writeFileSync(join(home, "sessions", `${id}.records.jsonl`), '{"v":1,"seq":1,"record":{}}\n', { mode: 0o600 });
+  prepareStorageGitFiles(home, [file, `sessions/${id}.records.jsonl`]);
+  assert.ok((await validateStorageTree(home)).some((entry) => entry.reason.includes("retained locally")));
+  assert.equal(readFileSync(join(home, file), "utf8"), bytes);
+  await assert.rejects(() => validateStorageTree(home, new Set([id])), /unsupported session version/);
+  git(home, "add", "-f", file);
+  await assert.rejects(() => validateStorageTree(home), /unsupported session version/);
+  rmSync(home, { recursive: true, force: true });
+});

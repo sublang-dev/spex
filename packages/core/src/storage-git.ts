@@ -73,7 +73,7 @@ function copySafe(source: string, target: string): void {
 }
 
 /** Public Playbook validation is the only authority for session bytes. */
-export async function validateStorageTree(home: string): Promise<StorageDiagnostic[]> {
+export async function validateStorageTree(home: string, selectedSessionIds?: ReadonlySet<string>): Promise<StorageDiagnostic[]> {
   const app = validateApplicationTree(home); const diagnostics = [...app.diagnostics];
   const config = join(home, "playbook", "playbook.config.yaml");
   if (existsSync(config)) {
@@ -87,17 +87,24 @@ export async function validateStorageTree(home: string): Promise<StorageDiagnost
       else throw new StorageFormatError(config, reason);
     }
   }
-  const { createSessionStore } = await import("@sublang/playbook/session-store");
+  const { createSessionStore, validateSessionManifest } = await import("@sublang/playbook/session-store");
   const sessionsDir = join(home, "sessions"); if (!existsSync(sessionsDir)) return diagnostics;
   const store = createSessionStore({ sessionsDir }); await store.prepare();
   const sessions = new Map<string, { projectId?: string; turns: Set<number> }>();
   for (const file of readdirSync(sessionsDir)) {
     if (!file.endsWith(".json") || !UUID.test(file.slice(0, -5))) continue;
     const id = file.slice(0, -5); const result = await store.validate(id);
+    if (result.manifest.schemaVersion !== 7) {
+      const tracked = selectedSessionIds?.has(id) ?? (existsSync(join(home, ".git")) && git(home, ["ls-files", "--", `sessions/${file}`]).length > 0);
+      if (tracked) throw new StorageFormatError(file, "unsupported session version cannot be selected as portable data");
+      diagnostics.push({ file: `sessions/${file}`, reason: `unsupported session version ${result.manifest.schemaVersion}; retained locally`, blocking: false });
+      continue;
+    }
+    const manifest = validateSessionManifest(result.manifest);
     if (!result.integrityValid) throw new StorageFormatError(file, result.history.damage?.reason ?? "session replay is missing, damaged or disagrees with its checkpoint");
-    const bindings = app.bindings.filter((b) => b.path === result.manifest.cwd || b.aliases.includes(result.manifest.cwd));
+    const bindings = app.bindings.filter((b) => b.path === manifest.cwd || b.aliases.includes(manifest.cwd));
     const bound = bindings.length === 1 && app.projects.some((p) => p.id === bindings[0].id) ? bindings[0].id : undefined;
-    if (!bound) diagnostics.push({ file: `sessions/${file}`, reason: `unresolved project working directory ${result.manifest.cwd}`, blocking: false });
+    if (!bound) diagnostics.push({ file: `sessions/${file}`, reason: `unresolved project working directory ${manifest.cwd}`, blocking: false });
     const turns = new Set<number>();
     for (const entry of result.history.entries) if (entry.record.type === "turn_started" && Number.isSafeInteger(entry.record.turnId)) turns.add(entry.record.turnId as number);
     sessions.set(id, { projectId: bound, turns });
@@ -137,7 +144,8 @@ export async function selectStorageMerge(home_: string, choices: Record<string, 
         else { mkdirSync(dirname(target), { recursive: true, mode: 0o700 }); writeFileSync(target, git(home, ["cat-file", "blob", oid]), { mode: 0o600 }); }
       }
     }
-    const diagnostics = await validateStorageTree(stage);
+    const selectedSessions = new Set(plan.units.filter((unit) => /^sessions\/[0-9a-f-]{36}$/.test(unit.name)).map((unit) => unit.name.slice(9)));
+    const diagnostics = await validateStorageTree(stage, selectedSessions);
     const { createSessionStore } = await import("@sublang/playbook/session-store");
     const sessionsDir = join(home, "sessions"); mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
     const shared = createSessionStore({ sessionsDir }); await shared.prepare();
