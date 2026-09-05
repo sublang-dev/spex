@@ -25,6 +25,7 @@ import type {
   SessionInfo,
   SpecTreeState,
   MachineGraph,
+  TmuxPlayRecord,
 } from "@sublang/spex-core/protocol";
 
 import { SpexClient, defaultCoreUrl, type ConnectionStatus } from "../lib/client.js";
@@ -198,6 +199,7 @@ export interface AppState {
   /** Delete an ended session's files and every trace (DR-038,
    * core-service-70); the core refuses a live or foreign one. */
   deleteSession(sessionId: string): Promise<void>;
+  recoverSession(sessionId: string, action: "retry" | "discard"): Promise<void>;
   /** Forget a deleted session everywhere — the listing, its tab, its
    * transcript, composer, and staged chip. The removal broadcast and
    * the delete reply both land here, idempotently. */
@@ -357,40 +359,40 @@ export const useAppStore = create<AppState>((set, get) => {
 
   /** Dispatch the next queued composer message when a turn is idle
    * (RUN-8), from live records and backfills alike. */
+  const queuedInFlight = new Set<string>();
   function maybeDispatchQueued(sessionId: string): void {
+    if (queuedInFlight.has(sessionId)) return;
     const state = get();
     const view = state.views[sessionId];
     const composer = state.composers[sessionId];
     const next = composer?.queued[0];
     if (!view || view.turnActive || next === undefined) return;
     const session = state.sessions.find((s) => s.id === sessionId);
+    if (session?.turnActive || session?.recovery) return;
     if (session && !session.live) {
-      // The session ended underneath the queue: drop it with a notice
-      // instead of submitting into a disposed runtime.
-      set({
-        composers: { ...state.composers, [sessionId]: { queued: [] } },
-        runErrors: {
-          ...state.runErrors,
-          [sessionId]: `queued message was not sent — the session ended: "${next.text}"`,
-        },
-      });
+      // Ended or replaced history cannot authorize an automatic send.
+      // Keep the queue available for the user's next action.
       return;
     }
     set({
       composers: {
         ...state.composers,
-        [sessionId]: { queued: composer!.queued.slice(1) },
+        [sessionId]: { ...composer, queued: composer!.queued.slice(1) },
       },
     });
+    queuedInFlight.add(sessionId);
     void getClient()
       .command("turn.submit", {
         sessionId,
         text: next.text,
         ...(next.intentId !== undefined ? { intentId: next.intentId } : {}),
       })
-      .catch((cause: Error) =>
-        setRunError(sessionId, `queued submission failed: ${cause.message}`),
-      );
+      .catch((cause: Error) => {
+        const current = get().composers[sessionId] ?? {queued: []};
+        set({composers: {...get().composers, [sessionId]: {...current, queued:[next, ...current.queued]}}});
+        setRunError(sessionId, `queued submission failed: ${cause.message}`);
+      })
+      .finally(() => queuedInFlight.delete(sessionId));
   }
 
   /** Fold one record into a view — and let a collapsed lane whose
@@ -422,7 +424,8 @@ export const useAppStore = create<AppState>((set, get) => {
       view.loading = true;
       set({ views: { ...state.views, [sessionId]: view } });
     }
-    backfilling.set(sessionId, []);
+    const pending: {seq: number; record: TmuxPlayRecord; role?: string}[] = [];
+    backfilling.set(sessionId, pending);
     try {
       await getClient().subscribe({ kind: "session", sessionId });
       const history = await getClient().command("history.get", {
@@ -431,7 +434,7 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       const fresh = get();
       const target = fresh.views[sessionId];
-      if (!target) return;
+      if (!target || backfilling.get(sessionId) !== pending) return;
       for (const entry of history.records) {
         if (entry.seq > target.lastSeq) {
           fold(sessionId, target, entry.seq, entry.record, entry.role);
@@ -448,6 +451,7 @@ export const useAppStore = create<AppState>((set, get) => {
       maybeDispatchQueued(sessionId);
     } catch (cause) {
       const failed = get().views[sessionId];
+      if (backfilling.get(sessionId) !== pending) return;
       if (failed?.loading) {
         failed.loading = false;
         set({ views: { ...get().views, [sessionId]: { ...failed } } });
@@ -458,7 +462,7 @@ export const useAppStore = create<AppState>((set, get) => {
       );
       throw cause;
     } finally {
-      backfilling.delete(sessionId);
+      if (backfilling.get(sessionId) === pending) backfilling.delete(sessionId);
     }
   }
 
@@ -497,8 +501,12 @@ export const useAppStore = create<AppState>((set, get) => {
         sessions.push(message.session);
         sessions.sort((a, b) => a.createdAt - b.createdAt);
         set({ sessions });
+        maybeDispatchQueued(message.session.id);
         break;
       }
+      case "session.history-replaced":
+        if (get().views[message.sessionId]) void get().loadPastSession(message.sessionId, true).catch((error: Error) => setRunError(message.sessionId, error.message));
+        break;
       case "session.removed":
         get().forgetSession(message.sessionId, message.projectId);
         break;
@@ -624,16 +632,18 @@ export const useAppStore = create<AppState>((set, get) => {
         getClient().command("project.list", {}),
         getClient().command("session.list", {}),
       ]);
-      set({ configState, readiness, projects, sessions });
+      const loaded = new Set(Object.keys(get().views));
+      for (const old of get().sessions) if (!sessions.some((session) => session.id === old.id)) get().forgetSession(old.id, old.projectId);
+      set({ configState, readiness, projects, sessions, views:{} });
       void get().loadLedger();
       void get().loadMachineGraphs();
       for (const project of projects) {
         void get().loadProjectMeta(project.id);
       }
-      // Re-subscribe every live session (fresh connection or reconnect)
-      // and backfill anything missed while disconnected.
+      // A checkout may replace history while disconnected. Reload cached
+      // conversations from sequence zero, retaining drafts and queued text.
       const live = sessions.filter((session) => session.live);
-      for (const session of live) {
+      for (const session of sessions.filter((item) => item.live || loaded.has(item.id))) {
         await ensureSubscribed(session.id).catch(() => {});
       }
       // Boot the project context (DR-011): the persisted project when
@@ -989,6 +999,17 @@ export const useAppStore = create<AppState>((set, get) => {
       if (session) get().forgetSession(sessionId, session.projectId);
     },
 
+    async recoverSession(sessionId: string, action: "retry" | "discard"): Promise<void> {
+      if (action === "retry") {
+        await getClient().command("session.retry", { sessionId });
+      } else {
+        const result = await getClient().command("session.discard", { sessionId });
+        const session = get().sessions.find((s) => s.id === sessionId);
+        if (result.removed && session) get().forgetSession(sessionId, session.projectId);
+        else await get().loadPastSession(sessionId, true);
+      }
+    },
+
     forgetSession(sessionId: string, projectId: string): void {
       // The tab first: closing lands the reader on a neighbour, never
       // on nothing (run-view-47).
@@ -1016,6 +1037,10 @@ export const useAppStore = create<AppState>((set, get) => {
 
     async submitBossText(sessionId: string, text: string): Promise<void> {
       const state = get();
+      const session = state.sessions.find((s) => s.id === sessionId);
+      if (session?.recovery && !session.turnActive) {
+        throw new Error("Recover the interrupted turn before sending another message.");
+      }
       const view = state.views[sessionId];
       // A staged intent dispatches with the text that carries it
       // (DR-035); the chip leaves the composer either way — riding
@@ -1040,11 +1065,10 @@ export const useAppStore = create<AppState>((set, get) => {
         });
         consumeStaged();
       };
-      if (view?.turnActive) {
+      if (view?.turnActive || session?.turnActive) {
         enqueue();
         return;
       }
-      const session = state.sessions.find((s) => s.id === sessionId);
       try {
         // A message to an ended session continues it (DR-042): the
         // connection re-subscribed only live sessions, so this one's

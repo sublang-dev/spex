@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen,
-  within,
+  within, waitFor,
 } from "@testing-library/react";
 
 afterEach(cleanup);
@@ -116,7 +116,9 @@ function systemLine(text: string | RegExp): HTMLElement | null {
   );
 }
 
-function renderRun(entries: typeof FULL_RUN) {
+function renderRun(entries: typeof FULL_RUN, storedGraphs = false) {
+  if (storedGraphs) entries = [{seq:1, record:{type:"session_context", timestamp:0, contextVersion:1, graphs:[{playbookId:"code",graph:codeGraph},{playbookId:"review",graph:reviewGraph}]} as unknown as TmuxPlayRecord},
+    ...entries.map((entry) => ({...entry, seq:entry.seq + 1, record:{...entry.record, contextSeq:1}}))];
   const view = applyRecords(
     initialSessionView(PLAYERS),
     entries,
@@ -781,7 +783,7 @@ describe("run-view-60/76/81: the card's words and its fit to the pane", () => {
   });
 
   test("boxes take their column's longest label; a long caption falls back to its role", () => {
-    renderRun(MACHINE_RUN.slice(0, 13));
+    renderRun(MACHINE_RUN.slice(0, 13), true);
     const code = screen.getByTestId("machine-card-t-code");
     // "reported review failure" sets its column's width, so it reads
     // whole at 13px and the shorter names share the box width.
@@ -852,7 +854,7 @@ describe("run-view-60/76/81: the card's words and its fit to the pane", () => {
   });
 
   test("unwalked exits into rest states fold to a count until walked or hovered", () => {
-    renderRun(MACHINE_RUN.slice(0, 13));
+    renderRun(MACHINE_RUN.slice(0, 13), true);
     const code = screen.getByTestId("machine-card-t-code");
     // runFirstPhase's three unwalked exits — two into failed, one
     // into the Boss-reply wait (playbook 12.2's CODE) — fold to one
@@ -2089,4 +2091,153 @@ describe("run-view-116/117: a lane folds to a rail and returns for its call", ()
       screen.getByRole("button", { name: "Collapse dev.reviewer" }),
     );
   });
+});
+
+describe("run-view-110: explicit uncertain-turn recovery", () => {
+  function renderInterrupted(onRecover: (action: "retry" | "discard") => Promise<void> = vi.fn(async () => {}), connected = true) {
+    const session = { ...SESSION, live: false, continuable: false, recovery: { state: "uncertain" as const, input: "Original interrupted request" } };
+    const props = {
+      session, view: initialSessionView(PLAYERS),
+      composer: { draft: "Keep my draft", queued: [{ text: "Later" }] },
+      connected, readOnly: true, onRecover,
+      onDraftChange: vi.fn(), onSubmit: vi.fn(async () => {}),
+      onAbort: vi.fn(), onRemoveQueued: vi.fn(), onDismissError: vi.fn(),
+    };
+    return { ...render(<RunView {...props} />), props, onRecover };
+  }
+
+  test("confirms the saved input, prevents duplicate recovery, and retains a refused draft", async () => {
+    let refuse!: (error: Error) => void;
+    const onRecover = vi.fn(() => new Promise<void>((_resolve, reject) => { refuse = reject; }));
+    const { props } = renderInterrupted(onRecover);
+    expect(screen.getByText("Original interrupted request")).toBeTruthy();
+    expect(screen.getByDisplayValue("Keep my draft")).toBeTruthy();
+    const send = screen.getAllByRole("button").find((b) => b.textContent === "Send");
+    expect((send as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Cancel" }), { key: "Escape" });
+    expect(onRecover).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Discard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(onRecover).toHaveBeenCalledExactlyOnceWith("discard");
+    expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => refuse(new Error("Effect ledger advanced; discard refused.")));
+    expect(screen.getByRole("alert").textContent).toContain("Effect ledger advanced");
+    expect(screen.getByDisplayValue("Keep my draft")).toBeTruthy();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  test("sends recovery over the protocol with only the selected session ID", async () => {
+    const previous = useAppStore.getState();
+    const command = vi.fn(async () => ({ accepted: true }));
+    setClientForTests({ command } as never);
+    renderInterrupted(async (action) => {
+      await useAppStore.getState().recoverSession(SESSION.id, action);
+    });
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Retry" })));
+      expect(command).toHaveBeenCalledExactlyOnceWith("session.retry", { sessionId: SESSION.id });
+    } finally {
+      setClientForTests(undefined);
+      useAppStore.setState(previous, true);
+    }
+  });
+
+  test("does not dispatch disconnected recovery", () => {
+    renderInterrupted(undefined, false);
+    expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Discard" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  test("holds queued messages through turn_finished until checkpoint settlement", () => {
+    const previous = useAppStore.getState();
+    const command = vi.fn(async () => ({}));
+    setClientForTests({ command } as never);
+    useAppStore.setState({
+      sessions: [{ ...SESSION, turnActive: true }],
+      views: { s1: initialSessionView(PLAYERS) },
+      composers: { s1: { draft: "Draft", queued: [{ text: "After settlement" }] } },
+      specTrees: {}, activeSessionId: undefined,
+    });
+    try {
+      deliverServerMessageForTests({ type: "record", channel: "session", sessionId: "s1", seq: 1,
+        record: { type: "turn_finished", turnId: 1, timestamp: 1 } as TmuxPlayRecord });
+      expect(command).not.toHaveBeenCalled();
+      deliverServerMessageForTests({ type: "session.state", session: { ...SESSION, live: false, recovery: { state: "uncertain", input: "saved" } } });
+      expect(command).not.toHaveBeenCalled();
+      expect(useAppStore.getState().composers.s1.queued).toHaveLength(1);
+      deliverServerMessageForTests({ type: "session.state", session: { ...SESSION, turnActive: false } });
+      expect(command).toHaveBeenCalledExactlyOnceWith("turn.submit", { sessionId: "s1", text: "After settlement" });
+    } finally {
+      setClientForTests(undefined);
+      useAppStore.setState(previous, true);
+    }
+  });
+});
+
+test("run-view-110: a rejected queued send preserves its text and draft", async () => {
+  const previous = useAppStore.getState();
+  const command = vi.fn(async () => { throw new Error("Resolve uncertainty first"); });
+  setClientForTests({command} as never);
+  useAppStore.setState({sessions:[{...SESSION,turnActive:false}],views:{s1:initialSessionView(PLAYERS)},composers:{s1:{draft:"My draft",queued:[{text:"Next request"}]}},specTrees:{},activeSessionId:undefined});
+  try {
+    await Promise.resolve();
+    deliverServerMessageForTests({type:"session.state",session:{...SESSION,turnActive:false}});
+    await waitFor(() => expect(useAppStore.getState().runErrors.s1).toContain("Resolve uncertainty first"));
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().composers.s1).toEqual({draft:"My draft",queued:[{text:"Next request"}]});
+  } finally {setClientForTests(undefined);useAppStore.setState(previous,true);}
+});
+
+describe("run-view-64: immutable graph context", () => {
+  test("stored runs keep their own graph after newer context and current-module changes", () => {
+    const context = (seq: number, graph: MachineGraph) => ({seq, record:{
+      type:"session_context", timestamp:seq, contextVersion:1,
+      graphs:[{playbookId:"code", graph}],
+    } as unknown as TmuxPlayRecord});
+    const entries = MACHINE_RUN.map((entry,index) => ({...entry, seq:index+2,
+      record:{...entry.record, contextSeq:1} as TmuxPlayRecord}));
+    const view = applyRecords(initialSessionView(PLAYERS), [context(1, codeGraph as MachineGraph), ...entries]);
+    const frame = view.captain.find((line) => line.frame?.playbookId === "code")?.frame;
+    expect(frame?.historicalGraph).toEqual(codeGraph);
+    const replacement: MachineGraph = {initial:"replacement",nodes:[{id:"replacement",kind:"final",tags:[]}],edges:[]};
+    applyRecords(view, [context(entries.length+2,replacement)]);
+    expect(frame?.historicalGraph).toEqual(codeGraph);
+    expect(Object.values(view.contexts).at(-1)?.code).toEqual(replacement);
+  });
+
+  test("legacy traces and unknown context use observed states without borrowing a current graph", () => {
+    const view = applyRecords(initialSessionView(PLAYERS), MACHINE_RUN);
+    const frame = view.captain.find((line) => line.frame?.playbookId === "code")?.frame;
+    expect(frame?.historicalGraph).toBeNull();
+  });
+});
+
+test("run-view-123: reconnect and replacement reload history while preserving drafts", async () => {
+  const previous = useAppStore.getState();
+  const session = {...SESSION,live:false};
+  const old = applyRecords(initialSessionView(PLAYERS), [{seq:30,record:{type:"captain_reply",timestamp:1,turnId:1,text:"Unselected history"} as TmuxPlayRecord}]);
+  const records = [{seq:1,record:{type:"captain_reply",timestamp:2,turnId:1,text:"Selected history"} as TmuxPlayRecord}];
+  const command = vi.fn(async (type: string) => {
+    if (type === "session.list") return [session];
+    if (type === "history.get") return {records};
+    if (type === "config.get") return {status:"missing",path:"/config"};
+    if (type === "project.list" || type === "readiness.get") return [];
+    return {};
+  });
+  setClientForTests({command,subscribe:async () => {}} as never);
+  useAppStore.setState({sessions:[session],views:{s1:old},composers:{s1:{draft:"Keep draft",queued:[{text:"Keep queue"}]}},specTrees:{},activeSessionId:undefined,projects:[],history:{}});
+  try {
+    await useAppStore.getState().refresh();
+    expect(command).toHaveBeenCalledWith("history.get", {sessionId:"s1",afterSeq:0});
+    expect(useAppStore.getState().views.s1.lastSeq).toBe(1);
+    useAppStore.setState({views:{s1:old}});
+    deliverServerMessageForTests({type:"session.history-replaced",sessionId:"s1"});
+    await waitFor(() => expect(useAppStore.getState().views.s1.lastSeq).toBe(1));
+    expect(useAppStore.getState().composers.s1).toEqual({draft:"Keep draft",queued:[{text:"Keep queue"}]});
+    expect(JSON.stringify(useAppStore.getState().views.s1)).not.toContain("Unselected history");
+  } finally {setClientForTests(undefined);useAppStore.setState(previous,true);}
 });

@@ -161,6 +161,7 @@ export function Composer({
   view,
   composer,
   connected,
+  blockedReason,
   error,
   playbooks = [],
   staged,
@@ -176,6 +177,7 @@ export function Composer({
   view: SessionView;
   composer: ComposerState;
   connected: boolean;
+  blockedReason?: string;
   error?: string;
   playbooks?: PlaybookSummary[];
   /** The intent staged into this composer, worn as a chip (DR-035). */
@@ -240,7 +242,7 @@ export function Composer({
 
   function submit() {
     const trimmed = text.trim();
-    if (!trimmed || sending || !connected) return;
+    if (!trimmed || sending || !connected || blockedReason) return;
     setSending(true);
     onSubmit(trimmed)
       .then(() => setText(""))
@@ -448,7 +450,7 @@ export function Composer({
                       textareaRef.current?.focus();
                     });
                 }}
-                disabled={text.trim().length === 0 || sending || !connected}
+                disabled={text.trim().length === 0 || sending || !connected || !!blockedReason}
                 className={SECONDARY_CLASS}
               >
                 Add to Up next
@@ -481,7 +483,7 @@ export function Composer({
                 data-testid="send-button"
                 onClick={submit}
                 className={PRIMARY_CLASS}
-                disabled={text.trim().length === 0 || sending || !connected}
+                disabled={text.trim().length === 0 || sending || !connected || !!blockedReason}
                 title={
                   !connected
                     ? "Not connected"

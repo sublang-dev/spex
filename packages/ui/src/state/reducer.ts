@@ -8,8 +8,10 @@
 import {
   hasPresentationHeader,
   type TmuxPlayRecord,
+  type MachineGraph,
 } from "@sublang/spex-core/protocol";
 
+import { contextGraphs } from "../lib/session-context.js";
 import { plainFailure } from "../lib/labels.js";
 
 /** What one call reported spending, in tokens and tool uses. Every
@@ -114,6 +116,7 @@ export interface CaptainLine {
 }
 
 export interface SessionView {
+  contexts: Record<number, Record<string, MachineGraph | null>>;
   captain: CaptainLine[];
   /** Streaming captain speech accumulated from visible deltas. */
   captainDraft: string;
@@ -141,6 +144,7 @@ export function initialSessionView(
 ): SessionView {
   return {
     captain: [],
+    contexts: {},
     captainDraft: "",
     players: Object.fromEntries(
       players.map((player) => [
@@ -335,6 +339,11 @@ export function applyRecord(
   const meta: SegmentMeta = { seq, at: r.timestamp };
 
   switch (r.type) {
+    case "session_context": {
+      const graphs = contextGraphs(r);
+      if (graphs) view.contexts[seq] = graphs;
+      break;
+    }
     case "turn_started": {
       view.turnActive = true;
       const turn = r.turn as { id: number; prompt: string };
@@ -552,6 +561,13 @@ export function applyRecord(
           r.timestamp,
           view.settledRuns,
         );
+        const graphs = typeof r.contextSeq === "number" ? view.contexts[r.contextSeq] : undefined;
+        const bind = (frame: MachineFrame): void => {
+          if (!("historicalGraph" in frame)) frame.historicalGraph = graphs?.[frame.playbookId] ?? null;
+          for (const child of frame.settledCalls) bind(child);
+        };
+        for (const frame of fold.open) bind(frame);
+        if (fold.closed) bind(fold.closed);
         view.frames = [...fold.open];
         view.settledRuns = [...fold.settled];
         if (fold.closed?.active === "awaitBossReply") {

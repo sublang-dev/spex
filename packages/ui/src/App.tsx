@@ -761,6 +761,7 @@ function WorkspaceSurface({
             onEnd={
               activeSession.live ? () => endSession(activeSession) : undefined
             }
+            onRecover={(action) => useAppStore.getState().recoverSession(activeSession.id, action)}
             onRetryLoad={() => {
               void loadPastSession(activeSession.id, true).catch(() => {});
             }}

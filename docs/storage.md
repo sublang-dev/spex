@@ -52,7 +52,8 @@ An `uncertain` session requires explicit recovery in desktop or CLI:
 Neither action authorizes repeating completed effects or erasing unresolved evidence.
 
 The **replay stream** contains Captain/player records, including hidden records, and immutable execution context: participants, settings, role bindings and state-machine definitions.
-Events and checkpoints reference that context, allowing historical graphs to render without installed playbook modules.
+Events and checkpoints reference that context, allowing recorded graphs to render without installed playbook modules.
+When a host has no graph definition, history shows only observed states and transitions.
 Activity, summaries and usage are derived from records.
 Valid unknown record kinds and headerless legacy records are not corruption.
 Unsupported recovery versions allow history viewing and deletion, but no continuation; older writers preserve their bytes.
@@ -71,6 +72,7 @@ Original migration inputs and unsupported files remain ignored.
 Tracked `.gitignore` rules exclude local data; `.gitattributes` disables line-ending conversion for JSON/JSONL files.
 
 Use one branch per device's Spex home, shared by desktop and CLI and merged to or from `main`.
+The [Git workflow](storage-git.md) gives the selection and validation commands.
 Stop local writers during commit, checkout and merge.
 Run each session on at most one device at a time; leases are local.
 
@@ -87,7 +89,7 @@ Apply the same selection rule to each configuration file, project registry and i
 Unselected changes leave active state but remain recoverable from Git history.
 Git's text merge alone does not enforce these rules.
 
-Before reopening, validate the selected files and intent logs for duplicate sources or queue ranks, dependency cycles and invalid session/turn references.
+Before reopening, validate the selected files and intent logs for duplicate artifact sources or queue ranks, dependency cycles and invalid session/turn references.
 Report unresolved project paths and missing project IDs; retain their files unlisted without automatic registration.
 Before continuing, reconcile repository state and completed external actions with the selected checkpoint.
 Git selection cannot undo actions recorded only in the unselected history.

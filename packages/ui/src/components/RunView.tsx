@@ -25,6 +25,7 @@ import {
   CAPTAIN_SPLIT_MIN,
   useAppStore,
 } from "../state/store.js";
+import { SessionRecovery } from "./SessionRecovery.js";
 import { Composer } from "./Composer.js";
 import { DeliveryCard } from "./DeliveryCard.js";
 import { InlineConfirm } from "./InlineConfirm.js";
@@ -126,6 +127,7 @@ export function RunView({
   onStartNew,
   onCompileNew,
   onRetryLoad,
+  onRecover,
   onDraftChange,
   onSubmit,
   onAbort,
@@ -155,6 +157,7 @@ export function RunView({
   onCompileNew?: () => void;
   /** Retry a failed transcript load (read-only view). */
   onRetryLoad?: () => void;
+  onRecover?: (action: "retry" | "discard") => Promise<void>;
   onDraftChange?: (draft: string) => void;
   onSubmit: (text: string) => Promise<void>;
   onAbort: () => void;
@@ -394,6 +397,7 @@ export function RunView({
   // on it — a continuable session is ended yet keeps its composer
   // (run-view-33, DR-042).
   const ended = readOnly || !session.live;
+  const uncertain = !!session.recovery && !session.turnActive;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -487,7 +491,14 @@ export function RunView({
               onDrop={(intent) => closeIntent(intent.id, "dropped")}
             />
           ) : null}
-          {ended ? (
+          {uncertain ? (
+            <SessionRecovery
+              input={session.recovery!.input}
+              connected={connected && !session.live}
+              onRecover={onRecover}
+            />
+          ) : null}
+          {ended && !uncertain ? (
             <>
               {readOnly && error ? (
                 // A failed history load must not read as an empty run
@@ -517,7 +528,7 @@ export function RunView({
               >
                 <span className="min-w-0 flex-1 basis-40">
                   {readOnly
-                    ? "Ended — this session can't be continued"
+                    ? (session.continuationReason ?? "Ended — this session can't be continued")
                     : "Ended · a message continues it"}
                 </span>
                 {onStartNew ? (
@@ -533,11 +544,12 @@ export function RunView({
               </div>
             </>
           ) : null}
-          {readOnly ? null : (
+          {readOnly && !uncertain ? null : (
             <Composer
               view={view}
               composer={composer}
               connected={connected}
+              blockedReason={uncertain ? "Recover the interrupted turn before sending." : undefined}
               error={error}
               playbooks={playbooks}
               staged={staged}

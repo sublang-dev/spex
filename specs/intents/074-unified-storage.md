@@ -39,4 +39,4 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 ## Verification
 
 - Required acceptance behavior is specified in storage, core-service, projects, run-view and playbook-library.
-- No implementation tests or builds have run for this intent; historical results do not verify the new contract.
+- Application storage, Git selection, real-shell continuation, cross-host recovery and browser recovery matrices pass against the working shared runtime. Coordinated registry-only release gates remain.

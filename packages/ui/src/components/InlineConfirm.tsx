@@ -11,12 +11,14 @@ export function InlineConfirm({
   question,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  disabled = false,
   onConfirm,
   onCancel,
 }: {
   question: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  disabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
@@ -37,6 +39,7 @@ export function InlineConfirm({
         type="button"
         className="min-h-6 rounded border border-red-300 px-1.5 py-0.5 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
         onClick={onConfirm}
+        disabled={disabled}
       >
         {confirmLabel}
       </button>

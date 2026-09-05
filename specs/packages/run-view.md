@@ -122,7 +122,7 @@ The Boss composer shall accept free text and `/`-prefixed command text, be the o
 
 - while no turn is active, a submission dispatches without queueing, the primary control reading "Send";
 - while a turn is active, a submission queues with a visible queued indicator until the queued submission is dispatched, the primary control reading "Send next" ([DR-041](../decisions/041-chrome-that-fits.md));
-- when the active turn settles, the queued submission dispatches; uncertainty holds the queue until explicit recovery [[run-view-110](#run-view-110)];
+- when the active turn settles, the queued submission dispatches; a refused submission preserves its queued text and draft with the error shown, and uncertainty holds the queue until explicit recovery [[run-view-110](#run-view-110)];
 - the primary control's tooltip names its keys — Enter sends, Shift+Enter adds a line — and, while a turn is active, opens by saying the message sends when this turn ends.
 
 #### run-view-106
@@ -234,6 +234,10 @@ When an ended session is opened [[run-view-68](#run-view-68)], the run view shal
 - for any other session the core lists as continuable ([DR-042](../decisions/042-sessions-continue.md)) the notice reads "Ended · a message continues it" above the enabled composer; otherwise it reads "Ended — this session can't be continued" in the composer's place;
 - the notice wraps its control under its words when its pane is too narrow for both ([DR-041](../decisions/041-chrome-that-fits.md));
 - when the transcript fails to load, the run view says so and offers a retry that reloads it — a failed load never presents as an empty run.
+
+#### run-view-123
+
+When the core reconnects or reports replaced history [[core-service-87](core-service.md#core-service-87)], the run view shall reload affected cached conversations from sequence zero while retaining drafts and queued input.
 
 #### run-view-110
 
@@ -827,6 +831,10 @@ Where a fixture project holds a queue whose unblocked head intent has more inten
 Where fixture streams hold one intent standing on a pending question, one holding an unacknowledged failure, and one finished awaiting its verdict, when each session is opened from its attention entry, the test suite shall assert the run view focuses the question's bubble, the failure's line, and the delivery card respectively [[run-view-91](#run-view-91)].
 
 ### Protocol Boundary Coverage
+
+#### run-view-124
+
+When an integration suite reconnects the app store and delivers a history-replacement notification over its protocol boundary, it shall verify reloading from sequence zero with drafts and queued input preserved [[run-view-123](#run-view-123)].
 
 #### run-view-19
 

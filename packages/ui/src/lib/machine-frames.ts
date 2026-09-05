@@ -22,6 +22,8 @@ export interface MachineTransition {
 export interface MachineFrame {
   /** The trace's own session identity — the frame key. */
   traceSessionId: string;
+  /** Frozen definition from this run's recorded context; null means observed only. */
+  historicalGraph?: MachineGraph | null;
   playbookId: string;
   depth: number;
   parentSessionId?: string;
