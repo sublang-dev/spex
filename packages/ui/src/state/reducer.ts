@@ -125,6 +125,8 @@ export interface SessionView {
   currentTurnId: number | null;
   /** True while a history replay is loading after (re)subscription. */
   loading?: boolean;
+  /** A failed backfill is separate from a refused session command. */
+  loadError?: string;
   fsmState?: string;
   captainMode?: string;
   /** Live machine frames, parents before children (run-view-60/63). */

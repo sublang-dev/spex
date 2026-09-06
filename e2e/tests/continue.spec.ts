@@ -41,6 +41,7 @@ test("run-view-109: a message continues an ended session, before and after a res
   ).toBeVisible();
   await expect(page.getByTestId("end-session")).toBeVisible();
   await expect(finished).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: /fix the token refresh/i })).toHaveCount(1);
 
   // The shell restarts underneath the page: the session lists ended
@@ -120,4 +121,11 @@ test("run-view-111: Retry uses saved input and Discard restores the preceding ch
   await expect(page.getByText(/a message continues it/i)).toBeVisible();
   await expect(captain.getByTestId("boss-bubble")).toHaveCount(1);
   await expect(captain).not.toContainText("Discard this unexecuted request");
+  await expect(page.getByTestId("abort-button")).toHaveCount(0);
+  await expect(page.getByTestId("working-indicator")).toHaveCount(0);
+  await page.getByTestId("boss-composer").fill("Continue after discarding");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(captain.getByTestId("boss-bubble").filter({ hasText: "Continue after discarding" })).toHaveCount(1);
+  await expect(captain.getByText("Acknowledged by the real Captain.", { exact: true })).toHaveCount(2);
+  await expect(page.getByTestId("queue-indicator")).toHaveCount(0);
 });

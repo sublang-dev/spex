@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: 2026 SubLang International <https://sublang.ai>
 
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createTmuxPlayRuntime, type Captain, type PlayerAdapterImports } from "@sublang/cligent/tmux-play";
 import { openSessionHost, discardSessionUncertain, type SessionHostController } from "@sublang/playbook/session-host";
 import { validateCaptainSessionExecutionProjection, type SessionExecutionProjection, type ReplayStreamEntry } from "@sublang/playbook/session-store";
@@ -53,7 +55,7 @@ function executionConfig(composed: ComposedConfig, cwd: string): SessionExecutio
     catalog: Object.fromEntries(composed.playbooks.map((playbook) => {
       const block = composed.captainOptions.playbooks[playbook.id];
       return [playbook.id, {
-        id: playbook.id, from: playbook.from,
+        id: playbook.id, from: isAbsolute(playbook.from) ? pathToFileURL(playbook.from).href : playbook.from,
         manifestCommand: playbook.manifestCommand,
         command: playbook.command, intent: playbook.intent,
         artifactSchema: playbook.artifactSchema,
@@ -86,7 +88,7 @@ export class SessionManager {
   listSessions(): SessionInfo[] {
     return this.store.listSessions().map((session) => {
       const live = this.live.get(session.id);
-      return {...session, live: !!live || session.live, turnActive: live?.turnActive ?? session.turnActive ?? false};
+      return {...session, ...(live ? {externalWriter:undefined} : {}), live: !!live || session.live, turnActive: live?.turnActive ?? (session.live ? session.turnActive ?? false : false)};
     });
   }
   listLanes(): { sessionId: string; projectId: string; turnActive: boolean }[] {
@@ -124,6 +126,7 @@ export class SessionManager {
       throw new CoreError("busy", `end the active session in ${project.name} first`);
     }
     this.opening.add(project.id);
+    this.store.setLocalSession(sessionId, true);
     let entry: LiveSession | undefined;
     let controller: SessionHostController | undefined;
     try {
@@ -171,6 +174,7 @@ export class SessionManager {
       return {...info, live:true, turnActive:false};
     } catch (error) {
       if (controller) await controller.dispose();
+      this.store.setLocalSession(sessionId, false);
       throw this.failure(error, mode === "new" ? "invalid_config" : "invalid_request");
     } finally { this.opening.delete(project.id); }
   }
@@ -224,7 +228,7 @@ export class SessionManager {
         entry.turnActive = false;
         entry.pendingIntentId = undefined;
         if (failed) {
-          try { await entry.controller.dispose(); this.live.delete(entry.info.id); }
+          try { await entry.controller.dispose(); this.live.delete(entry.info.id); this.store.setLocalSession(entry.info.id, false); }
           catch (error) { console.error(`spex: session cleanup failed; ownership retained: ${String(error)}`); }
         }
         await this.store.refreshSession(entry.info.id, this.live.has(entry.info.id));
@@ -246,6 +250,7 @@ export class SessionManager {
     await entry.operation;
     await entry.controller.dispose();
     this.live.delete(sessionId);
+    this.store.setLocalSession(sessionId, false);
     await this.store.refreshSession(sessionId, false);
     this.publish(sessionId);
     this.onLedgerChange(entry.info.projectId);
@@ -258,7 +263,7 @@ export class SessionManager {
   private publish(sessionId: string): void {
     const session = this.store.describeSession(sessionId);
     const entry = this.live.get(sessionId);
-    if (session) this.onSessionState({...session, live:!!entry, turnActive:entry?.turnActive ?? false});
+    if (session) this.onSessionState({...session, ...(entry ? {externalWriter:undefined} : {}), live:!!entry, turnActive:entry?.turnActive ?? false});
   }
   private requireLive(sessionId: string): LiveSession {
     const entry = this.live.get(sessionId);

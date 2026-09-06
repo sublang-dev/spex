@@ -65,15 +65,16 @@ meta.md       The spec of specs
 | [DR-039](decisions/039-browser-acceptance-journeys.md) | 039-browser-acceptance-journeys.md | Browser acceptance journeys: Playwright over the served UI against a real core with substitute agents, journeys as package test items, hermetic lane in CI, live lane opt-in |
 | [DR-040](decisions/040-source-only-app-releases.md) | 040-source-only-app-releases.md | Source-only app releases: `app-v*` tags publish notes and run-from-source instructions with no binaries, one version across both shells, a root changelog, the CLI channel's gates |
 | [DR-041](decisions/041-chrome-that-fits.md) | 041-chrome-that-fits.md | Chrome that fits: the pane as the unit of fit, three container steps, a 14-character label budget, the yield ladder, 280px/320px floors, the composer's shape, a browser journey that measures overlap |
-| [DR-042](decisions/042-sessions-continue.md) | 042-sessions-continue.md | Sessions continue: a token-free Captain snapshot in the sidecar lets a message continue an ended session; every listed session, terminal-run ones included, can be deleted behind a lease check |
+| [DR-042](decisions/042-sessions-continue.md) | 042-sessions-continue.md | Session continuation and lease-checked deletion; sidecar recovery replaced by DR-045's shared lifecycle |
 | [DR-043](decisions/043-minimal-spec-editing.md) | 043-minimal-spec-editing.md | Minimal spec editing: one confined atomic write with digest-token conflicts, a whole-file plain-text editor with preview in the spec view, drafts that survive navigation |
 | [DR-044](decisions/044-no-money-in-the-interface.md) | 044-no-money-in-the-interface.md | No money in the interface: the usage line reports tokens only; a recorded cost is never rendered |
 | [DR-045](decisions/045-unified-session-storage.md) | 045-unified-session-storage.md | Shared desktop/CLI storage: one Spex home, portable history/graphs, local provider hints, Git with whole-session choices |
 | [DR-047](decisions/047-explicit-session-recovery.md) | 047-explicit-session-recovery.md | Explicit desktop Retry/Discard through shared uncertain-turn recovery |
 | [DR-048](decisions/048-failed-session-cleanup.md) | 048-failed-session-cleanup.md | Failed cleanup retains session ownership and project reservation |
 | [DR-049](decisions/049-supported-app-hosts.md) | 049-supported-app-hosts.md | macOS/Linux app hosts with private POSIX storage; Windows scaffold and browser clients |
+| [DR-050](decisions/050-shared-storage-cutover.md) | 050-shared-storage-cutover.md | Playbook 13 / Cligent 0.25 floors, former-store cutover and scoped damage isolation |
 | [DR-046](decisions/046-decision-record-evolution.md) | 046-decision-record-evolution.md | Accepted-decision evolution: successor DRs, scoped reciprocal links, current spec items updated on acceptance |
-| [DR-037](decisions/037-playbook-12-adoption.md) | 037-playbook-12-adoption.md | Playbook 12 adoption: floor ^12.2 (with slc 0.7) / cligent ^0.24, host capabilities from the shipped builder with an in-memory effect ledger, installed template and `dev` built-in, one-time config relocation, journal-listed history |
+| [DR-037](decisions/037-playbook-12-adoption.md) | 037-playbook-12-adoption.md | Playbook 12 adoption, installed templates and config relocation; host lifecycle amended by DR-045, dependency floors by DR-050 |
 | [DR-038](decisions/038-history-is-done-work.md) | 038-history-is-done-work.md | History is done work: finished records as history seeds, removal without trace, verdict grammar, the project Overview tab, session deletion, the fast-mode mark |
 
 ## Packages
@@ -81,7 +82,7 @@ meta.md       The spec of specs
 | File | Summary |
 | --- | --- |
 | [app-shell.md](packages/app-shell.md) | Desktop shell: guarded source launch and ABI restoration; single-instance window, notifications, dock badge, core-in-main over WebSocket, packaging; packaged-app acceptance |
-| [core-service.md](packages/core-service.md) | Headless core service: WebSocket protocol, config load/seed/reload, session lifecycle with snapshot-backed continuation and lease-checked deletion, record streaming, persistence, readiness — with fake-adapter end-to-end coverage |
+| [core-service.md](packages/core-service.md) | Headless core: WebSocket protocol, shared session lifecycle/recovery/deletion, scoped storage diagnostics, config, records and readiness |
 | [dashboard.md](packages/dashboard.md) | Dashboard as the intent ledger: two-band attention queue, Running band, per-project History/Now/Up next/Sources groups, one-gesture capture; one deterministic core fold |
 | [desktop-session.md](packages/desktop-session.md) | A Boss session in the packaged app: shell process topology, core streaming, and run-view rendering over one protocol |
 | [forge-work-lists.md](packages/forge-work-lists.md) | Repo tab and Dashboard render the same forge-adapter data |

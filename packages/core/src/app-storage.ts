@@ -32,8 +32,9 @@ const recordedPath = (value: unknown): value is string => text(value) && !value.
 );
 
 export class StorageFormatError extends Error {
-  constructor(readonly file: string, reason: string) { super(`${file}: ${reason}`); this.name = "StorageFormatError"; }
+  constructor(readonly file: string, readonly reason: string) { super(`${file}: ${reason}`); this.name = "StorageFormatError"; }
 }
+class StorageMigrationError extends StorageFormatError {}
 function need(condition: unknown, file: string, reason: string): asserts condition {
   if (!condition) throw new StorageFormatError(file, reason);
 }
@@ -131,10 +132,10 @@ export function foldIntentActs(acts: IntentAct[], file: string, intents = new Ma
   }
   return { intents, removed };
 }
-export function validateIntentRelations(intents: Map<string, IntentInfo>, removed: Set<string>, file = "intents"): void {
+export function validateIntentRelations(intents: Map<string, IntentInfo>, removed: Set<string>, file = "intents", projectId?: string): void {
   const ranks = new Set<string>(); const sources = new Set<string>();
   for (const intent of intents.values()) {
-    if (removed.has(intent.id)) continue;
+    if (removed.has(intent.id) || projectId !== undefined && intent.projectId !== projectId) continue;
     if (intent.closedAt === undefined) {
       const rank = `${intent.projectId}\0${intent.rank}`;
       need(!ranks.has(rank), file, `duplicate open rank ${intent.rank}`); ranks.add(rank);
@@ -154,9 +155,10 @@ export function validateIntentRelations(intents: Map<string, IntentInfo>, remove
 export function validateIntentDispatches(
   intents: Map<string, IntentInfo>,
   sessions: Map<string, {projectId?: string; turns: ReadonlySet<number>}>,
+  projectId?: string,
 ): void {
   for (const intent of intents.values()) {
-    if (!intent.dispatched) continue;
+    if (!intent.dispatched || projectId !== undefined && intent.projectId !== projectId) continue;
     const session = sessions.get(intent.dispatched.sessionId);
     if (!session) continue; // Deleted targets retain ledger derivation.
     need((session.projectId === undefined || session.projectId === intent.projectId) && session.turns.has(intent.dispatched.turnId),
@@ -196,51 +198,71 @@ export function migrateApplicationRegistry(home: string): void {
   }
   if (!receipt && !existsSync(file)) return;
   const original = receipt ? readFileSync(join(receiptDir!, "inputs", "0")) : readFileSync(file);
-  const before = JSON.parse(original.toString("utf8")) as Record<string, unknown>;
+  let before: Record<string, unknown>;
+  try { before = JSON.parse(original.toString("utf8")) as Record<string, unknown>; }
+  catch { throw new StorageFormatError(receipt ? join(receiptDir!, "inputs", "0") : file, "invalid JSON"); }
+  need(object(before), receipt ? join(receiptDir!, "inputs", "0") : file, "expected a registry object");
   if (before.v === 2 && !receipt) { parseRegistry(before, file); return; }
-  closed(before, ["v", "projects"], [], file);
-  need(before.v === 1 && Array.isArray(before.projects), file, "unsupported registry version; preserved unchanged");
-  const identities: ProjectIdentity[] = []; const bindings: ProjectBinding[] = [];
-  for (const p of before.projects) {
-    closed(p, ["id", "path", "name", "registeredAt"], [], file);
-    need(localPath(p.path), file, "invalid legacy project path");
-    identities.push({ id: p.id as string, name: p.name as string, registeredAt: p.registeredAt as number });
-    bindings.push({ id: p.id as string, path: p.path, aliases: [] });
-  }
-  const registry = { v: 2, projects: identities }; const mapping = { v: 1, bindings };
-  parseRegistry(registry, file); parseBindings(mapping, bindingsFile);
-  if (!receipt) {
-    const id = randomUUID(); receiptDir = join(migrations, id); mkdirSync(join(receiptDir, "inputs"), { recursive: true, mode: 0o700 });
-    writeApplicationBytes(join(receiptDir, "inputs", "0"), original);
-    receipt = { v: 1, id, inputs: [{ path: file, sha256: sha256(original) }], complete: false };
-    writeApplicationFile(join(receiptDir, "receipt.json"), receipt);
-  }
-  need(receipt.v === 1 && receipt.id === receiptDir!.split(/[\\/]/).at(-1) && receipt.inputs[0].sha256 === sha256(original), file, "invalid migration receipt or retained input");
-  for (const [target, expected, allowed] of [[bindingsFile, mapping, undefined], [file, registry, original]] as const) {
-    const bytes = Buffer.from(JSON.stringify(expected));
-    if (existsSync(target)) {
-      const current = readFileSync(target);
-      if (current.equals(bytes)) continue;
-      need(allowed !== undefined && current.equals(allowed), target, "migration destination diverged; preserved unchanged");
+  if (!receipt && before.v !== 1) throw new StorageFormatError(file, "unsupported registry version; preserved unchanged");
+  try {
+    closed(before, ["v", "projects"], [], file);
+    need(before.v === 1 && Array.isArray(before.projects), file, "unsupported registry version; preserved unchanged");
+    const identities: ProjectIdentity[] = []; const bindings: ProjectBinding[] = [];
+    for (const p of before.projects) {
+      closed(p, ["id", "path", "name", "registeredAt"], [], file);
+      need(localPath(p.path), file, "invalid legacy project path");
+      identities.push({ id: p.id as string, name: p.name as string, registeredAt: p.registeredAt as number });
+      bindings.push({ id: p.id as string, path: p.path, aliases: [] });
     }
-    writeApplicationFile(target, expected);
+    const registry = { v: 2, projects: identities }; const mapping = { v: 1, bindings };
+    parseRegistry(registry, file); parseBindings(mapping, bindingsFile);
+    if (!receipt) {
+      const id = randomUUID(); receiptDir = join(migrations, id); mkdirSync(join(receiptDir, "inputs"), { recursive: true, mode: 0o700 });
+      writeApplicationBytes(join(receiptDir, "inputs", "0"), original);
+      receipt = { v: 1, id, inputs: [{ path: file, sha256: sha256(original) }], complete: false };
+      writeApplicationFile(join(receiptDir, "receipt.json"), receipt);
+    }
+    need(receipt.v === 1 && receipt.id === receiptDir!.split(/[\\/]/).at(-1) && receipt.inputs[0].sha256 === sha256(original), file, "invalid migration receipt or retained input");
+    for (const [target, expected, allowed] of [[bindingsFile, mapping, undefined], [file, registry, original]] as const) {
+      const bytes = Buffer.from(JSON.stringify(expected));
+      if (existsSync(target)) {
+        const current = readFileSync(target);
+        if (current.equals(bytes)) continue;
+        need(allowed !== undefined && current.equals(allowed), target, "migration destination diverged; preserved unchanged");
+      }
+      writeApplicationFile(target, expected);
+    }
+    parseRegistry(readJsonFile(file), file); parseBindings(readJsonFile(bindingsFile), bindingsFile);
+    receipt.complete = true; writeApplicationFile(join(receiptDir!, "receipt.json"), receipt);
+  } catch (error) {
+    if (error instanceof StorageFormatError) throw new StorageMigrationError(error.file, error.reason);
+    throw error;
   }
-  parseRegistry(readJsonFile(file), file); parseBindings(readJsonFile(bindingsFile), bindingsFile);
-  receipt.complete = true; writeApplicationFile(join(receiptDir!, "receipt.json"), receipt);
 }
 
 export class ApplicationRegistry {
   readonly identities = new Map<string, ProjectIdentity>();
   readonly bindings = new Map<string, ProjectBinding>();
-  constructor(readonly home?: string) {
+  private readonly problems: StorageDiagnostic[] = [];
+  constructor(readonly home?: string, tolerateDamage = false) {
     if (!home) return;
-    migrateApplicationRegistry(home);
+    const read = (operation: () => void): void => {
+      try { operation(); } catch (error) {
+        if (!tolerateDamage || error instanceof StorageMigrationError || !(error instanceof StorageFormatError) || ![join(home, "projects.json"), join(home, "local", "project-paths.json")].includes(error.file)) throw error;
+        if (!this.problems.some((problem) => problem.file === error.file)) this.problems.push({file:error.file, reason:error.reason, blocking:true});
+      }
+    };
+    read(() => migrateApplicationRegistry(home));
     const registry = join(home, "projects.json"); const mapping = join(home, "local", "project-paths.json");
-    for (const item of existsSync(registry) ? parseRegistry(readJsonFile(registry), registry) : []) this.identities.set(item.id, item);
-    for (const item of existsSync(mapping) ? parseBindings(readJsonFile(mapping), mapping) : []) this.bindings.set(item.id, item);
+    read(() => { for (const item of existsSync(registry) ? parseRegistry(readJsonFile(registry), registry) : []) this.identities.set(item.id, item); });
+    read(() => { for (const item of existsSync(mapping) ? parseBindings(readJsonFile(mapping), mapping) : []) this.bindings.set(item.id, item); });
+  }
+  assertWritable(): void {
+    const problem = this.problems[0];
+    if (problem) throw new StorageFormatError(problem.file, problem.reason);
   }
   diagnostics(): StorageDiagnostic[] {
-    const reports: StorageDiagnostic[] = []; const paths = new Map<string, Set<string>>();
+    const reports: StorageDiagnostic[] = [...this.problems]; const paths = new Map<string, Set<string>>();
     for (const binding of this.bindings.values()) {
       if (!this.identities.has(binding.id)) reports.push({ file: "local/project-paths.json", reason: `unregistered project ${binding.id}`, blocking: false });
       for (const p of [binding.path, ...binding.aliases]) { const ids = paths.get(p) ?? new Set<string>(); ids.add(binding.id); paths.set(p, ids); }
@@ -261,12 +283,14 @@ export class ApplicationRegistry {
     return identity ? { ...identity, path: matches[0].path } : undefined;
   }
   register(p: string, name: string, at: number): ProjectInfo {
+    this.assertWritable();
     const normalized = resolve(p);
     const existing = this.resolvePath(normalized); if (existing) return existing;
     need(![...this.bindings.values()].some((b) => b.path === normalized || b.aliases.includes(normalized)), "local/project-paths.json", `path ${normalized} needs explicit rebinding`);
     const id = randomUUID(); return this.bind({ id, name, registeredAt: at }, normalized, []);
   }
   bind(identity: ProjectIdentity, p: string, aliases?: string[]): ProjectInfo {
+    this.assertWritable();
     parseRegistry({ v: 2, projects: [identity] });
     const prior = this.bindings.get(identity.id);
     const retained = aliases ?? [...(prior?.aliases ?? []), ...(prior && prior.path !== resolve(p) ? [prior.path] : [])];
@@ -275,7 +299,7 @@ export class ApplicationRegistry {
     need(![...this.bindings.values()].some((b) => b.id !== identity.id && [b.path, ...b.aliases].some((x) => [binding.path, ...binding.aliases].includes(x))), "local/project-paths.json", "path or alias already belongs to another project");
     this.identities.set(identity.id, identity); this.bindings.set(identity.id, binding); this.save(); return { ...identity, path: binding.path };
   }
-  remove(id: string): boolean { const found = this.identities.delete(id); if (found) { this.bindings.delete(id); this.save(); } return found; }
+  remove(id: string): boolean { this.assertWritable(); const found = this.identities.delete(id); if (found) { this.bindings.delete(id); this.save(); } return found; }
   save(): void {
     if (!this.home) return;
     writeApplicationFile(join(this.home, "local", "project-paths.json"), { v: 1, bindings: [...this.bindings.values()] });
@@ -300,7 +324,12 @@ export function validateApplicationTree(home: string): {
   for (const file of existsSync(intentsDir) ? readdirSync(intentsDir) : []) {
     if (!file.endsWith(".jsonl")) continue;
     const full = join(intentsDir, file);
-    foldIntentActs(parseIntentLog(readFileSync(full, "utf8"), file.slice(0, -6), full), full, intents, removed);
+    const folded = foldIntentActs(parseIntentLog(readFileSync(full, "utf8"), file.slice(0, -6), full), full);
+    for (const [id, intent] of folded.intents) {
+      need(!intents.has(id), full, `duplicate queue ${id}`);
+      intents.set(id, intent);
+    }
+    for (const id of folded.removed) removed.add(id);
   }
   validateIntentRelations(intents, removed);
   const ids = new Set(projects.map((p) => p.id));

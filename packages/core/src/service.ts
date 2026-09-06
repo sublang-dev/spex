@@ -56,6 +56,7 @@ import { CoreError, SessionManager, type CaptainFactory, type RecordEnvelope } f
 import { closedStats, foldLedger, intentTitle, wasWorked } from "./ledger.js";
 import { rankBetween } from "./rank.js";
 import { Store } from "./store.js";
+import { StorageFormatError } from "./app-storage.js";
 import { prepareStorageGitFiles } from "./storage-git.js";
 import {
   GitHubForgeAdapter,
@@ -711,7 +712,7 @@ export class CoreService {
       });
     } catch (error) {
       const code: ErrorCode =
-        error instanceof CoreError ? error.code : (error as {code?:string})?.code === "PLAYBOOK_SESSION_LEASE_ACTIVE" ? "busy" : "internal";
+        error instanceof CoreError ? error.code : error instanceof StorageFormatError ? "invalid_request" : (error as {code?:string})?.code === "PLAYBOOK_SESSION_LEASE_ACTIVE" ? "busy" : "internal";
       const message = error instanceof Error ? error.message : String(error);
       this.send(client.socket, {
         type: "reply",
@@ -726,9 +727,9 @@ export class CoreService {
     client: ClientState,
     command: Command,
   ): Promise<unknown> {
-    if (["session.create", "session.retry", "turn.submit", "project.create", "project.remove", "project.rebind", "config.edit", "compile.run", "intent.queue", "intent.edit", "intent.move", "intent.link", "intent.close", "intent.remove"].includes(command.type)) {
-      this.store.assertWritable();
-    }
+    if (["project.create", "project.register", "project.rebind", "project.remove"].includes(command.type)) this.store.assertProjectsWritable();
+    if (command.type === "session.create" || command.type === "intent.queue") this.store.assertWritable({projectId:command.projectId});
+    if (command.type === "session.retry" || command.type === "session.discard" || command.type === "turn.submit") this.store.assertWritable({sessionId:command.sessionId});
     switch (command.type) {
       case "config.get":
         return this.configState;
@@ -738,7 +739,6 @@ export class CoreService {
         return this.store.listProjects();
       case "project.register": {
         const path = expandPath(command.path, this.home);
-        if (!this.store.getProjectByPath(path)) this.store.assertWritable();
         if (!existsSync(path) || !statSync(path).isDirectory()) {
           throw new CoreError(
             "invalid_request",
@@ -1381,6 +1381,7 @@ export class CoreService {
   private requireOpenIntent(intentId: string) {
     const intent = this.store.getIntent(intentId);
     if (!intent) throw new CoreError("not_found", `no intent ${intentId}`);
+    this.store.assertWritable({projectId:intent.projectId});
     if (intent.closedAt !== undefined) {
       throw new CoreError("conflict", "the intent is already closed");
     }

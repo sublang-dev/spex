@@ -353,6 +353,15 @@ export function deliverServerMessageForTests(message: ServerMessage): void {
 let ledgerReads = 0;
 
 export const useAppStore = create<AppState>((set, get) => {
+  /** Records describe the conversation; the listing owns activity,
+   * including settlement after the final reply and stopped history. */
+  function sessionActivity(view: SessionView, session?: SessionInfo): SessionView {
+    const turnActive = session?.live === false
+      ? false
+      : session?.turnActive ?? view.turnActive;
+    return { ...view, turnActive };
+  }
+
   function setRunError(sessionId: string, message: string): void {
     set({ runErrors: { ...get().runErrors, [sessionId]: message } });
   }
@@ -447,19 +456,18 @@ export const useAppStore = create<AppState>((set, get) => {
         }
       }
       target.loading = false;
-      set({ views: { ...fresh.views, [sessionId]: { ...target } } });
+      target.loadError = undefined;
+      set({ views: { ...fresh.views, [sessionId]: sessionActivity(target, fresh.sessions.find((s) => s.id === sessionId)) } });
       maybeDispatchQueued(sessionId);
     } catch (cause) {
       const failed = get().views[sessionId];
       if (backfilling.get(sessionId) !== pending) return;
-      if (failed?.loading) {
+      const message = `transcript could not be loaded: ${(cause as Error).message}`;
+      if (failed) {
         failed.loading = false;
-        set({ views: { ...get().views, [sessionId]: { ...failed } } });
+        failed.loadError = message;
+        set({ views: { ...get().views, [sessionId]: sessionActivity(failed, get().sessions.find((s) => s.id === sessionId)) } });
       }
-      setRunError(
-        sessionId,
-        `transcript could not be loaded: ${(cause as Error).message}`,
-      );
       throw cause;
     } finally {
       if (backfilling.get(sessionId) === pending) backfilling.delete(sessionId);
@@ -500,7 +508,10 @@ export const useAppStore = create<AppState>((set, get) => {
         );
         sessions.push(message.session);
         sessions.sort((a, b) => a.createdAt - b.createdAt);
-        set({ sessions });
+        const view = get().views[message.session.id];
+        set({ sessions, ...(view ? {
+          views: { ...get().views, [message.session.id]: sessionActivity(view, message.session) },
+        } : {}) });
         maybeDispatchQueued(message.session.id);
         break;
       }
@@ -540,7 +551,7 @@ export const useAppStore = create<AppState>((set, get) => {
         fold(sessionId, view, seq, record, role);
 
         const updates: Partial<AppState> = {
-          views: { ...state.views, [sessionId]: { ...view } },
+          views: { ...state.views, [sessionId]: sessionActivity(view, session) },
         };
 
         set(updates);
@@ -1066,7 +1077,7 @@ export const useAppStore = create<AppState>((set, get) => {
         });
         consumeStaged();
       };
-      if (view?.turnActive || session?.turnActive) {
+      if (session?.live !== false && (session?.turnActive ?? view?.turnActive)) {
         enqueue();
         return;
       }

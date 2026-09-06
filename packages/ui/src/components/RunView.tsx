@@ -170,6 +170,18 @@ export function RunView({
 }) {
   const externalWriter = session.externalWriter;
   readOnly ||= !!externalWriter;
+  // Stop animation without closing the record fold's open text segment:
+  // another host can append its next delta while ownership is unknown.
+  const activityView = useMemo(() => view.turnActive ? view : {
+    ...view,
+    players: Object.fromEntries(Object.entries(view.players).map(([id, player]) => [id, {
+      ...player,
+      running: false,
+      segments: player.segments.map((segment) => segment.kind === "text"
+        ? { ...segment, streaming: false }
+        : segment),
+    }])),
+  }, [view]);
   const machineGraphs = useAppStore((state) => state.machineGraphs);
   const captainSplit = useAppStore((state) => state.captainSplit);
   const setCaptainSplit = useAppStore((state) => state.setCaptainSplit);
@@ -368,7 +380,7 @@ export function RunView({
   // out of sight, so a lane the reader is following never leaves
   // under them and the working one never hides beyond the edge.
   const runningLanes = lanes
-    .filter((playerId) => view.players[playerId]?.running)
+    .filter((playerId) => activityView.players[playerId]?.running)
     .join("\u0000");
   useEffect(() => {
     const grid = gridRef.current;
@@ -400,6 +412,7 @@ export function RunView({
   // (run-view-33, DR-042).
   const ended = !externalWriter && (readOnly || !session.live);
   const uncertain = !externalWriter && !!session.recovery && !session.turnActive;
+  const loadError = view.loadError ?? (readOnly && !uncertain ? error : undefined);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -486,7 +499,7 @@ export function RunView({
           }`}
         >
           <CaptainPane
-            view={view}
+            view={activityView}
             machineGraphs={machineGraphs}
             bossSources={bossSources}
             extras={extras}
@@ -510,27 +523,26 @@ export function RunView({
               onRecover={onRecover}
             />
           ) : null}
+          {loadError ? (
+            <div
+              role="alert"
+              data-testid="past-load-error"
+              className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+            >
+              <span className="min-w-0 flex-1">{loadError}</span>
+              {onRetryLoad ? (
+                <button
+                  type="button"
+                  onClick={onRetryLoad}
+                  className="font-medium text-brand-600 hover:underline dark:text-brand-300"
+                >
+                  Retry
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {ended && !uncertain ? (
             <>
-              {readOnly && error ? (
-                // A failed history load must not read as an empty run
-                // (DR-010 §5): name it and offer the retry.
-                <div
-                  data-testid="past-load-error"
-                  className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
-                >
-                  <span className="min-w-0 flex-1">{error}</span>
-                  {onRetryLoad ? (
-                    <button
-                      type="button"
-                      onClick={onRetryLoad}
-                      className="font-medium text-brand-600 hover:underline dark:text-brand-300"
-                    >
-                      Retry
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
               {/* The ended notice (run-view-33): a paused conversation
                   when a message can continue it, read-only otherwise;
                   its control wraps under the words in a narrow pane. */}
@@ -602,7 +614,7 @@ export function RunView({
                 <PlayerPane
                   key={playerId}
                   view={
-                    view.players[playerId] ?? {
+                    activityView.players[playerId] ?? {
                       id: playerId,
                       running: false,
                       segments: [],

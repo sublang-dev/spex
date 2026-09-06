@@ -7,6 +7,7 @@
 
 Accepted (2026-09-05).
 Amended by [DR-047](047-explicit-session-recovery.md) for desktop uncertain-turn recovery.
+Amended by [DR-050](050-shared-storage-cutover.md) for default-store discovery and damage isolation.
 Amends:
 
 - [DR-036](036-file-state-store.md): storage ownership, default locations, local data and Git synchronization.

@@ -2235,21 +2235,122 @@ describe("run-view-110: explicit uncertain-turn recovery", () => {
       composers: { s1: { draft: "Draft", queued: [{ text: "After settlement" }] } },
       specTrees: {}, activeSessionId: undefined,
     });
+    render(<StoredSessionRun />);
     try {
-      deliverServerMessageForTests({ type: "record", channel: "session", sessionId: "s1", seq: 1,
-        record: { type: "turn_finished", turnId: 1, timestamp: 1 } as TmuxPlayRecord });
+      act(() => deliverServerMessageForTests({ type: "record", channel: "session", sessionId: "s1", seq: 1,
+        record: { type: "turn_finished", turnId: 1, timestamp: 1 } as TmuxPlayRecord }));
       expect(command).not.toHaveBeenCalled();
-      deliverServerMessageForTests({ type: "session.state", session: { ...SESSION, live: false, recovery: { state: "uncertain", input: "saved" } } });
+      expect(useAppStore.getState().views.s1.turnActive).toBe(true);
+      expect(screen.getByTestId("working-indicator")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Send next" })).toBeTruthy();
+      act(() => deliverServerMessageForTests({ type: "session.state", session: { ...SESSION, live: false, recovery: { state: "uncertain", input: "saved" } } }));
       expect(command).not.toHaveBeenCalled();
       expect(useAppStore.getState().composers.s1.queued).toHaveLength(1);
-      deliverServerMessageForTests({ type: "session.state", session: { ...SESSION, turnActive: false } });
+      act(() => deliverServerMessageForTests({ type: "session.state", session: { ...SESSION, turnActive: false } }));
       expect(command).toHaveBeenCalledExactlyOnceWith("turn.submit", { sessionId: "s1", text: "After settlement" });
+      expect(useAppStore.getState().views.s1.turnActive).toBe(false);
     } finally {
       setClientForTests(undefined);
       useAppStore.setState(previous, true);
     }
   });
 });
+
+/** Real store actions and server messages drive the rendered session. */
+function StoredSessionRun() {
+  const state = useAppStore();
+  const session = state.sessions.find((entry) => entry.id === "s1");
+  const view = state.views.s1;
+  if (!session || !view || view.loading) return <span>Loading transcript…</span>;
+  return <RunView session={session} view={view}
+    composer={state.composers.s1 ?? { queued: [] }} connected
+    readOnly={!!session.externalWriter || (!session.live && !session.continuable)}
+    error={state.runErrors.s1}
+    onRetryLoad={() => { void state.loadPastSession("s1", true).catch(() => {}); }}
+    onRecover={(action) => state.recoverSession("s1", action)}
+    onDraftChange={(draft) => state.setDraft("s1", draft)}
+    onSubmit={(text) => state.submitBossText("s1", text)}
+    onAbort={() => state.abortTurn("s1")}
+    onRemoveQueued={() => {}} onDismissError={() => state.clearRunError("s1")} />;
+}
+
+test("stored mid-turn history stays idle and Discard permits a direct submission", async () => {
+  const previous = useAppStore.getState();
+  const stopped = { ...SESSION, live: false, turnActive: false, continuable: false,
+    recovery: { state: "uncertain" as const, input: "Interrupted request" } };
+  const records = [
+    { seq: 1, record: { type: "turn_started", timestamp: 1, turnId: 1, turn: { id: 1, prompt: "Interrupted request" } } },
+    { seq: 2, record: { type: "player_prompt", timestamp: 2, turnId: 1, playerId: "dev.coder", prompt: "Work in progress" } },
+    { seq: 3, record: { type: "player_event", timestamp: 3, turnId: 1, playerId: "dev.coder",
+      event: { type: "text_delta", payload: { delta: "Preserve partial output" } } } },
+  ] as { seq: number; record: TmuxPlayRecord }[];
+  const command = vi.fn(async (type: string) => {
+    if (type === "history.get") return { records };
+    if (type === "session.discard") {
+      deliverServerMessageForTests({ type: "session.state", session: { ...SESSION, live: false, turnActive: false, continuable: true } });
+      return { removed: false };
+    }
+    return {};
+  });
+  setClientForTests({ command, subscribe: async () => {} } as never);
+  useAppStore.setState({ sessions: [stopped], views: {}, runErrors: {}, stagedIntents: {},
+    composers: { s1: { draft: "Next request", queued: [{ text: "Keep queued request" }] } },
+    activeSessionId: undefined, specTrees: {} });
+  render(<StoredSessionRun />);
+  try {
+    await act(async () => useAppStore.getState().loadPastSession("s1"));
+    expect(screen.getByText("Preserve partial output")).toBeTruthy();
+    expect(screen.queryByTestId("working-indicator")).toBeNull();
+    expect(screen.queryByTestId("player-running")).toBeNull();
+    expect(screen.queryByTestId("abort-button")).toBeNull();
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("player-pane-dev.coder").querySelector(".animate-pulse")).toBeNull();
+    // The display is idle without rewriting the conversation's open
+    // segment, so subsequent replay/deltas still combine correctly.
+    expect(useAppStore.getState().views.s1.players["dev.coder"].segments.at(-1)).toMatchObject({ text: "Preserve partial output", streaming: true });
+    await act(async () => useAppStore.getState().recoverSession("s1", "discard"));
+    expect(screen.queryByRole("region", { name: "Interrupted turn" })).toBeNull();
+    expect(screen.queryByTestId("working-indicator")).toBeNull();
+    expect(screen.queryByTestId("abort-button")).toBeNull();
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => useAppStore.getState().submitBossText("s1", "Next request"));
+    expect(command).toHaveBeenCalledWith("turn.submit", { sessionId: "s1", text: "Next request" });
+    expect(useAppStore.getState().composers.s1.queued).toEqual([{ text: "Keep queued request" }]);
+  } finally { setClientForTests(undefined); useAppStore.setState(previous, true); }
+});
+
+test.each(["active", "unknown", "continuable", "uncertain"] as const)(
+  "%s session history reports load failure and retries without losing input", async (kind) => {
+    const previous = useAppStore.getState();
+    const externalWriter = kind === "active" || kind === "unknown" ? kind : undefined;
+    const session = { ...SESSION, live: kind === "active", turnActive: false, externalWriter,
+      continuable: kind === "continuable",
+      ...(kind === "uncertain" ? { recovery: { state: "uncertain" as const, input: "Saved input" } } : {}),
+    };
+    const history = vi.fn().mockRejectedValueOnce(new Error("Cannot read selected transcript"))
+      .mockResolvedValueOnce({ records: [{ seq: 1, record: { type: "captain_reply", timestamp: 1, turnId: 1, text: "Recovered history" } }] });
+    const command = vi.fn(async (type: string) => type === "history.get" ? history() : {});
+    setClientForTests({ command, subscribe: async () => {} } as never);
+    const composer = { draft: "Keep draft", queued: [{ text: "Keep queue" }] };
+    useAppStore.setState({ sessions: [session], views: {}, composers: { s1: composer },
+      runErrors: {}, activeSessionId: undefined, specTrees: {} });
+    render(<StoredSessionRun />);
+    try {
+      await act(async () => {
+        await expect(useAppStore.getState().loadPastSession("s1")).rejects.toThrow("Cannot read selected transcript");
+      });
+      const error = screen.getByTestId("past-load-error");
+      expect(error.textContent).toContain("Cannot read selected transcript");
+      if (externalWriter) expect(screen.getByTestId("session-external-owner")).toBeTruthy();
+      await act(async () => fireEvent.click(within(error).getByRole("button", { name: "Retry" })));
+      expect(await screen.findByText("Recovered history")).toBeTruthy();
+      expect(screen.queryByTestId("past-load-error")).toBeNull();
+      expect(command.mock.calls.every(([type]) => type === "history.get")).toBe(true);
+      expect(history).toHaveBeenCalledTimes(2);
+      expect(useAppStore.getState().composers.s1).toEqual(composer);
+    } finally { setClientForTests(undefined); useAppStore.setState(previous, true); }
+  },
+);
 
 test("run-view-110: a rejected queued send preserves its text and draft", async () => {
   const previous = useAppStore.getState();

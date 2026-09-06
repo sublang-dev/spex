@@ -105,6 +105,7 @@ When a client requests deletion of any stored session, the core service shall ob
 When a client requests the session list, the core service shall reply with every stored session's lifecycle fields and its conversation summary ([DR-029](../decisions/029-session-history-home.md)):
 
 - each entry carries the session's resolved project, creation and end times, liveness and `turnActive`, which stays true until the turn transaction settles or fails; host of origin is not an admission condition;
+- a non-live session has no active turn; historical records alone never establish liveness, and a session acquired by this core is never reported as externally owned;
 - each entry says whether a Boss message continues it, using the shared checkpoint, replay and execution checks [[core-service-73](#core-service-73)], with a reason when history-only;
 - each uncertain entry carries `recovery: {state: "uncertain", input}` with the exact saved input; uncertainty is never reported as normal continuability;
 - external session leases are observed through Playbook's shared API [[1]]: an active writer reports liveness, and active or unprovable ownership reports `externalWriter` and withholds recovery controls until ownership is idle;
@@ -127,7 +128,9 @@ When a client sends `project.rebind` with `projectId`, local `path`, optional re
 
 #### core-service-86
 
-When a client sends `storage.diagnostics`, the core shall report each unresolved binding or invalid stored file as `{file, reason, blocking}`, preserving the data and distinguishing history-only limitations from write-blocking damage [[storage-12](storage.md#storage-12)].
+When a client sends `storage.diagnostics`, the core shall report each unresolved binding or invalid stored file as `{file, reason, blocking}`, preserving the data and distinguishing history-only limitations from write-blocking damage [[storage-12](storage.md#storage-12)]:
+
+- after verified migration, damaged application or session files do not refuse startup; affected commands return `invalid_request` with the failing file and reason, while unrelated operations remain available.
 
 ### Boss Turns
 

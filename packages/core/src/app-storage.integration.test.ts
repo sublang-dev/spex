@@ -117,3 +117,18 @@ test("selected-tree validation reports orphan identities and rejects duplicate r
   assert.throws(() => parsePrefs({ v: 1, prefs: { [`viewed:${a.id}`]: -1 } }), /invalid viewed/);
   rmSync(home, { recursive: true, force: true });
 });
+
+test("startup tolerance never bypasses an incomplete registry migration", () => {
+  const home=scratch(); const id=randomUUID(); const migration=randomUUID();
+  const registryFile=join(home,"projects.json");
+  const original=JSON.stringify({v:1,projects:[{id,path:join(home,"repo"),name:"Legacy",registeredAt:1,unexpected:true}]});
+  const dir=join(home,"local","migrations",migration); mkdirSync(join(dir,"inputs"),{recursive:true});
+  writeFileSync(join(dir,"inputs","0"),original);
+  writeFileSync(join(dir,"receipt.json"),JSON.stringify({v:1,id:migration,inputs:[{path:registryFile,sha256:sha256(original)}],complete:false}));
+  const current=JSON.stringify({v:2,projects:[{id,name:"Legacy",registeredAt:1}]}); writeFileSync(registryFile,current);
+  try {
+    assert.throws(()=>new ApplicationRegistry(home,true),/expected fields/);
+    assert.equal(readFileSync(registryFile,"utf8"),current);
+    assert.equal(JSON.parse(readFileSync(join(dir,"receipt.json"),"utf8")).complete,false);
+  } finally {rmSync(home,{recursive:true,force:true});}
+});

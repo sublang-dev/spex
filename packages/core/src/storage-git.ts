@@ -184,16 +184,35 @@ export async function selectStorageMerge(home_: string, choices: Record<string, 
 
 /** Install tracked Git rules after validated migration, before first tracking. */
 export function prepareStorageGitFiles(home: string, unsupportedPaths: string[] = []): void {
-  const ignores = ["/local/", "/prefs.json", "/meta.json", "/forge-cache.json", "/.lock*", "*.hints.json", "*.spex.json", "*.lock", "*.lock.*", "*.tmp", "*.bak", "*.bak.*", "*.backup", "*.backup.*", ...unsupportedPaths.map((file) => {
+  const ignores = ["/local/", "/prefs.json", "/meta.json", "/forge-cache.json", "/.lock*", "*.hints.json", "*.spex.json", "*.lock", "*.lock.*", "*.tmp", "*.bak", "*.bak.*", "*.backup", "*.backup.*"];
+  const unsupported = [...new Set(unsupportedPaths)].sort().map((file) => {
     if (file.startsWith("/") || file.split("/").includes("..") || /[\r\n\0*?\[\]\\]/.test(file)) throw new Error(`unsafe ignore path ${file}`);
     return `/${file}`;
-  })];
+  });
   const attributes = ["*.json -text", "*.jsonl -text"];
-  for (const [name, lines] of [[".gitignore", ignores], [".gitattributes", attributes]] as const) {
+  const begin = "# BEGIN Spex managed storage rules";
+  const end = "# END Spex managed storage rules";
+  for (const [name, generated] of [[".gitignore", ignores], [".gitattributes", attributes]] as const) {
     const file = join(home, name); const prior = existsSync(file) ? readFileSync(file, "utf8") : "";
-    if (prior.trimEnd().endsWith(lines.join("\n"))) continue;
-    const missing = lines; // Last matching Git rule wins, including over an earlier negation.
+    const lines = prior.split("\n"); if (lines.at(-1) === "") lines.pop();
+    const authored: string[] = [];
+    for (let i = 0; i < lines.length;) {
+      if (lines[i] === begin) {
+        const last = lines.indexOf(end, i + 1);
+        if (last < 0) throw new StorageFormatError(file, "unterminated managed Git rules");
+        i = last + 1;
+      } else if (generated.every((line, offset) => lines[i + offset] === line)) {
+        // Upgrade only the old generator's exact contiguous block and
+        // immediately following session-bundle pairs. Keep authored rules.
+        i += generated.length;
+        if (name === ".gitignore") while (/^\/(?:[^/]+\/)+[0-9a-f-]{36}\.json$/.test(lines[i] ?? "") && lines[i + 1] === lines[i].replace(/\.json$/, ".records.jsonl")) i += 2;
+      } else { authored.push(lines[i++]); }
+    }
+    const managed = [...generated, ...(name === ".gitignore" ? unsupported : [])];
+    // Last matching Git rule wins, so move the single owned block last.
+    const next = [...authored, begin, ...managed, end, ""].join("\n");
+    if (next === prior) continue;
     const temporary = `${file}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, `${prior}${prior && !prior.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`, { mode: 0o600 }); renameSync(temporary, file);
+    writeFileSync(temporary, next, { mode: 0o600 }); renameSync(temporary, file);
   }
 }

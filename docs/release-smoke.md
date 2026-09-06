@@ -67,6 +67,9 @@ after five minutes the check fails and cleans up. No extra agent turn runs.
 ## 2. Manual pass — desktop app
 
 Launch: `npm start`.
+For upgrade checks, snapshot both storage locations described in the
+[catalog](storage.md#migration-and-definitions), then use copies in an
+isolated home; keep the originals untouched.
 
 | Step | Expect |
 | --- | --- |
@@ -76,6 +79,10 @@ Launch: `npm start`.
 | Playbooks surface | `/code`, `/review`, and `/decide` pipelines show source, gears, and state machine; example card stages all four artifacts; prefill fills the compile form (roles pre-mapped) |
 | Live run (`npm run smoke:desktop`, optionally with the manual pause) | Native notification follows the scratch preferences; dock badge matches Dashboard attention. A cleanly ended standalone session leaves both counts at zero. |
 | Session history and Dashboard | The aborted turn remains readable; player panes show usage only if the provider reported it. Dashboard lists outstanding questions, permissions, failures or finished work awaiting review; an ended standalone session creates none. |
+| Upgrade copied desktop and CLI data | Both histories appear with saved participants and graphs; unsupported checkpoints have a reason and no Continue action. |
+| Retry and Discard an interrupted session | Recovery shows its result; discarded history has no active spinner or Abort, and the next message sends normally. |
+| CLI writer, then deletion | Desktop shows readable external history and any load error with Retry; after CLI exit, management becomes available and deletion removes the session. |
+| Select Git history and rebind a copied project | After the [Git commands](storage-git.md), desktop shows the selected history under the existing project ID; incompatible paths remain history only. |
 | Settings | A Captain agent edit round-trips (adapter, model, effort, permissions); config stays valid |
 | Dark theme (OS toggle) | Sidebar mark, panes, and spec view stay legible |
 

@@ -113,6 +113,11 @@ test("run-view-99: a player question parks the session until the Boss replies", 
   await expect(chip).toContainText(/wait/i);
   const box = page.getByTestId("boss-composer");
   await expect(box).toHaveAttribute("placeholder", /reply to coder/i);
+  // A question is visible before the Boss turn's checkpoint settles.
+  // The settled composer, not the text alone, authorizes the reply.
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+  await expect(box).toBeEnabled();
+  await expect(page.getByTestId("session-external-owner")).toHaveCount(0);
 
   await box.fill("Yes, migrate them too");
   await page.getByRole("button", { name: "Send", exact: true }).click();

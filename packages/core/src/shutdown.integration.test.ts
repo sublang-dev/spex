@@ -174,8 +174,9 @@ async function startHarness(captains: Captain[]): Promise<Harness> {
   return { service, projectDirs };
 }
 
-test("CORE-40: a failed disposal keeps the session live and its project reserved", async () => {
+test("CORE-40: a failed disposal keeps the session live and its project reserved", async (t) => {
   const harness = await startHarness([brokenCaptain()]);
+  t.after(() => releaseFixtureLeases(harness.service));
   const client = new Client(harness.service.port());
   await client.open();
   try {
@@ -214,9 +215,10 @@ test("CORE-40: a failed disposal keeps the session live and its project reserved
   }
 });
 
-test("CORE-41: a failed disposal neither skips another nor holds the endpoint open", async () => {
+test("CORE-41: a failed disposal neither skips another nor holds the endpoint open", async (t) => {
   const healthy = healthyCaptain();
   const harness = await startHarness([brokenCaptain(), healthy.captain]);
+  t.after(() => releaseFixtureLeases(harness.service));
   const port = harness.service.port();
   const client = new Client(port);
   await client.open();
@@ -254,3 +256,12 @@ test("CORE-41: a failed disposal neither skips another nor holds the endpoint op
     }),
   );
 });
+
+
+async function releaseFixtureLeases(service: CoreService): Promise<void> {
+  // The intentionally broken captains above have no external work. After
+  // ownership assertions, close their retained file handles explicitly;
+  // production must keep refusing admission after unproven disposal.
+  const manager = service["sessions"];
+  for (const session of manager.listSessions()) await manager.getLive(session.id)?.controller.lease.release();
+}

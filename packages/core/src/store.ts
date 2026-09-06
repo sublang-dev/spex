@@ -250,6 +250,10 @@ export class Store {
   private temporarySessions?: string;
   private readonly sessionProblems = new Map<string, StorageDiagnostic>();
   private readonly untrackedSessions = new Set<string>();
+  private readonly localSessions = new Set<string>();
+  private readonly intentProblems = new Map<string, StorageDiagnostic>();
+  private prefsProblem?: StorageDiagnostic;
+  private cacheProblem?: StorageDiagnostic;
   private readonly sessions = new Map<string, SessionMeta>();
   private readonly records = new Map<string, StoredRecord[]>();
   private readonly turns = new Map<string, Map<number, TurnRow>>();
@@ -275,7 +279,7 @@ export class Store {
       this.importLegacy(options.legacyDbPath);
       this.meta.version = META_VERSION;
       writeAtomic(this.metaFile(), JSON.stringify(this.meta));
-      this.application = new ApplicationRegistry(this.dir);
+      this.application = new ApplicationRegistry(this.dir, true);
       this.load();
     } catch (error) {
       this.releaseRootLease();
@@ -374,7 +378,7 @@ export class Store {
   }
 
   private intentsFile(projectId: string): string {
-    return join(this.dir as string, "intents", `${projectId}.jsonl`);
+    return join(this.dir ?? "", "intents", `${projectId}.jsonl`);
   }
 
   // Every file kind carries its version marker (core-service-15):
@@ -392,7 +396,7 @@ export class Store {
   }
 
   private savePrefs(): void {
-    if (!this.dir) return;
+    if (!this.dir || this.prefsProblem) return;
     writeAtomic(
       join(this.dir, "prefs.json"),
       JSON.stringify({ v: 1, prefs: Object.fromEntries(this.prefs) }),
@@ -405,6 +409,7 @@ export class Store {
       join(this.dir, "forge-cache.json"),
       JSON.stringify({ v: 1, entries: Object.fromEntries(this.forgeCache) }),
     );
+    this.cacheProblem = undefined;
   }
 
   private appendIntentAct(projectId: string, act: IntentAct): void {
@@ -427,26 +432,48 @@ export class Store {
     const dir = this.dir as string;
     this.refreshProjects();
     const prefsFile = join(dir, "prefs.json");
-    for (const [key, value] of Object.entries(existsSync(prefsFile) ? parsePrefs(readJsonFile(prefsFile), prefsFile) : {})) this.prefs.set(key, value);
-    for (const [projectId, entry] of Object.entries(
-      readJson<{ entries: Record<string, { at: number; state: ForgeState }> }>(
-        join(dir, "forge-cache.json"),
-      )?.entries ?? {},
-    )) {
-      this.forgeCache.set(projectId, entry);
+    try {
+      for (const [key, value] of Object.entries(existsSync(prefsFile) ? parsePrefs(readJsonFile(prefsFile), prefsFile) : {})) this.prefs.set(key, value);
+    } catch (error) {
+      if (!(error instanceof StorageFormatError)) throw error;
+      this.prefsProblem = {file:error.file, reason:error.reason, blocking:true};
+    }
+    const cacheFile = join(dir, "forge-cache.json");
+    try {
+      for (const [projectId, entry] of Object.entries(
+        readJson<{ entries: Record<string, { at: number; state: ForgeState }> }>(cacheFile)?.entries ?? {},
+      )) this.forgeCache.set(projectId, entry);
+    } catch (error) {
+      this.cacheProblem = {file:cacheFile, reason:`Unreadable cache; refresh to rebuild: ${String(error)}`, blocking:false};
     }
     for (const file of readdirSync(join(dir, "intents"))) {
       if (!file.endsWith(".jsonl")) continue;
       const filename = join(dir, "intents", file);
-      const acts = parseIntentLog(readFileSync(filename, "utf8"), file.slice(0, -6), filename);
-      foldIntentActs(acts, filename, this.intents, this.removedIntents);
+      const projectId = file.slice(0, -6);
+      try {
+        const folded = foldIntentActs(parseIntentLog(readFileSync(filename, "utf8"), projectId, filename), filename);
+        for (const [id, intent] of folded.intents) {
+          const prior = this.intents.get(id);
+          if (prior) {
+            this.intentProblems.set(prior.projectId, {file:this.intentsFile(prior.projectId), reason:`duplicate queue ${id}`, blocking:true});
+            throw new StorageFormatError(filename, `duplicate queue ${id}`);
+          }
+        }
+        for (const [id, intent] of folded.intents) this.intents.set(id, intent);
+        for (const id of folded.removed) this.removedIntents.add(id);
+      } catch (error) {
+        if (!(error instanceof StorageFormatError)) throw error;
+        this.intentProblems.set(projectId, {file:error.file, reason:error.reason, blocking:true});
+      }
     }
-    validateIntentRelations(this.intents, this.removedIntents);
     const sessionsDir = this.sessionsDir as string;
     for (const file of readdirSync(sessionsDir)) {
       if (!file.endsWith(".spex.json")) continue;
-      const meta = readJson<SessionMeta>(join(sessionsDir, file));
-      if (!meta) continue;
+      let meta: SessionMeta | undefined;
+      try { meta = readJson<SessionMeta>(join(sessionsDir, file)); }
+      catch { continue; } // Shared migration reports and preserves this sidecar.
+      if (!meta || typeof meta !== "object" || Array.isArray(meta) || meta.id !== file.slice(0, -".spex.json".length) ||
+          typeof meta.projectId !== "string" || !Array.isArray(meta.players) || !Array.isArray(meta.initialVisible)) continue;
       this.sessions.set(meta.id, meta);
       const { records: stored, incompleteAfterSeq } = readRecordsPrefix(this.recordsFile(meta.id), true);
       if (incompleteAfterSeq !== undefined) {
@@ -511,7 +538,7 @@ export class Store {
     for (const filename of readdirSync(sessionsDir)) {
       if (!/^[0-9a-f-]{36}\.json$/.test(filename)) continue;
       const id = filename.slice(0, -5);
-      if (this.sessions.get(id)?.live) continue;
+      if (this.localSessions.has(id) || this.sessions.get(id)?.live) continue;
       const update = await this.refreshSession(id, false);
       if (update) changed.push(update);
     }
@@ -519,6 +546,7 @@ export class Store {
   }
 
   async refreshSession(id: string, live?: boolean): Promise<{ id: string; appended: StoredRecord[]; replaced?: boolean; unlistedProjectId?: string } | undefined> {
+    if (live === false && this.localSessions.has(id)) return;
     const shared = this.sessionStore();
     let manifest: SessionManifest;
     let stored: StoredRecord[];
@@ -528,6 +556,7 @@ export class Store {
     let problem: StorageDiagnostic | undefined;
     try {
       const checked = await shared.validate(id);
+      if (live === false && this.localSessions.has(id)) return;
       manifest = checked.manifest as SessionManifest;
       if (manifest.schemaVersion === 7 && !checked.integrityValid) problem = {file:join(shared.sessionsDir, `${id}.json`), reason:checked.reasons.join("; ") || "session checkpoint and replay disagree", blocking:true};
       stored = checked.history.entries.map(({ v: _v, ...entry }) => entry as unknown as StoredRecord);
@@ -537,6 +566,7 @@ export class Store {
         incompleteAfterSeq = Math.min(checked.history.lastReadableSeq, manifest.schemaVersion === 7 ? manifest.replay.seq : checked.history.lastReadableSeq);
       }
     } catch (error) {
+      if (live === false && this.localSessions.has(id)) return;
       reason = error instanceof Error ? error.message : String(error);
       this.untrackedSessions.add(id);
       problem = {file:join(shared.sessionsDir, `${id}.json`), reason, blocking: !/unsupported.*version|version.*unsupported/i.test(reason)};
@@ -553,6 +583,8 @@ export class Store {
         if (history.incomplete) incompleteAfterSeq = history.lastReadableSeq;
       } catch { return; }
     }
+    if (live === false && this.localSessions.has(id)) return;
+    if (manifest.schemaVersion === 7 && !problem) this.untrackedSessions.delete(id);
     if (typeof manifest.cwd !== "string") {
       this.sessionProblems.set(id, {file:join(shared.sessionsDir, `${id}.json`),reason:"session working directory is missing or invalid",blocking:manifest.schemaVersion === 7});
       return;
@@ -593,6 +625,7 @@ export class Store {
     }
     const prior = this.sessions.get(id);
     const writer = live ? "idle" : await shared.readLeaseState(id);
+    if (live === false && this.localSessions.has(id)) return;
     const meta: SessionMeta = {
       id, projectId: project.id,
       createdAt: Date.parse(manifest.createdAt) || stored.find(({record}) => hasPresentationHeader(record))?.record.timestamp || 0,
@@ -631,9 +664,19 @@ export class Store {
     return [...this.untrackedSessions].flatMap((id) => [join(directory, `${id}.json`), join(directory, `${id}.records.jsonl`)]);
   }
 
-  assertWritable(): void {
-    this.validateStorage();
-    const problem = this.sessionDiagnostics().find((entry) => entry.blocking);
+  /** Reserve local admission before any asynchronous host/scan work. */
+  setLocalSession(id: string, owned: boolean): void {
+    if (owned) this.localSessions.add(id); else this.localSessions.delete(id);
+  }
+
+  assertProjectsWritable(): void { this.application.assertWritable(); }
+
+  assertWritable(scope: {projectId: string; sessionId?: never} | {projectId?: never; sessionId: string}): void {
+    this.assertProjectsWritable();
+    const sessionProblem = scope.sessionId ? this.sessionProblems.get(scope.sessionId) : undefined;
+    if (sessionProblem?.blocking) throw new StorageFormatError(sessionProblem.file, sessionProblem.reason);
+    const projectId = scope.projectId ?? (scope.sessionId ? this.sessions.get(scope.sessionId)?.projectId : undefined);
+    const problem = projectId ? this.projectProblems().get(projectId) : undefined;
     if (problem) throw new StorageFormatError(problem.file, problem.reason);
   }
 
@@ -871,20 +914,43 @@ export class Store {
   }
 
   storageDiagnostics(): StorageDiagnostic[] {
-    const reports = this.application.diagnostics();
+    const reports = [...this.application.diagnostics(), ...this.projectProblems().values(), ...(this.prefsProblem ? [this.prefsProblem] : []), ...(this.cacheProblem ? [this.cacheProblem] : [])];
     const absent = new Set([...this.intents.values()].filter((intent) => !this.application.identities.has(intent.projectId)).map((intent) => intent.projectId));
     for (const id of absent) reports.push({ file: `intents/${id}.jsonl`, reason: `unregistered project ${id}`, blocking: false });
     return reports;
   }
 
-  validateStorage(): StorageDiagnostic[] {
-    validateIntentRelations(this.intents, this.removedIntents);
-    validateIntentDispatches(this.intents, new Map([...this.sessions.values()].map((session) => [session.id, {
-      projectId: session.projectId,
-      turns: new Set(this.turns.get(session.id)?.keys() ?? []),
-    }])));
-    return this.storageDiagnostics();
+  private projectProblems(intents = this.intents, removed = this.removedIntents): Map<string, StorageDiagnostic> {
+    const problems = new Map(this.intentProblems);
+    const sessions = new Map([...this.sessions.values()].map((session) => [session.id, {
+      projectId: session.projectId, turns: new Set(this.turns.get(session.id)?.keys() ?? []),
+    }]));
+    for (const projectId of new Set([...intents.values()].map((intent) => intent.projectId))) {
+      try {
+        validateIntentRelations(intents, removed, this.intentsFile(projectId), projectId);
+        validateIntentDispatches(intents, sessions, projectId);
+      } catch (error) {
+        if (!(error instanceof StorageFormatError)) throw error;
+        problems.set(projectId, {file:error.file, reason:error.reason, blocking:true});
+      }
+    }
+    // A queue cannot trust a predecessor whose own project's log is invalid.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const intent of intents.values()) {
+        const predecessor = intent.afterId ? intents.get(intent.afterId) : undefined;
+        const problem = predecessor ? problems.get(predecessor.projectId) : undefined;
+        if (!removed.has(intent.id) && intent.closedAt === undefined && problem && !problems.has(intent.projectId)) {
+          problems.set(intent.projectId, {file:this.intentsFile(intent.projectId), reason:`depends on invalid ${problem.file}: ${problem.reason}`, blocking:true});
+          changed = true;
+        }
+      }
+    }
+    return problems;
   }
+
+  validateStorage(): StorageDiagnostic[] { return this.storageDiagnostics(); }
 
   listProjects(): ProjectInfo[] {
     return [...this.projects.values()].sort((a, b) => a.registeredAt - b.registeredAt);
@@ -1198,10 +1264,12 @@ export class Store {
   // -- intents (DR-035, the act log of CORE-52) -----------------------------
 
   private commitIntentAct(projectId: string, act: IntentAct): void {
+    this.assertWritable({projectId});
     const next = new Map([...this.intents].map(([id, intent]) => [id, structuredClone(intent)]));
     const removed = new Set(this.removedIntents);
     foldIntentActs([act], `intents/${projectId}.jsonl`, next, removed);
-    validateIntentRelations(next, removed);
+    const problem = this.projectProblems(next, removed).get(projectId);
+    if (problem) throw new StorageFormatError(problem.file, problem.reason);
     this.appendIntentAct(projectId, act);
     this.intents.clear(); for (const [id, intent] of next) this.intents.set(id, intent);
     this.removedIntents.clear(); for (const id of removed) this.removedIntents.add(id);
@@ -1363,6 +1431,7 @@ export class Store {
   // -- prefs ----------------------------------------------------------------
 
   setPref(key: string, value: unknown): void {
+    if (this.prefsProblem) throw new StorageFormatError(this.prefsProblem.file, this.prefsProblem.reason);
     this.prefs.set(key, value);
     this.savePrefs();
   }

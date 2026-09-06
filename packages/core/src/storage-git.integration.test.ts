@@ -137,8 +137,8 @@ test("Git validation and core reopening agree on selected dispatch boundaries", 
     const store = new Store({dir:home});
     try {
       await store.initializeSessions();
-      if (valid) store.assertWritable();
-      else assert.throws(() => store.assertWritable(),/invalid dispatch/);
+      if (valid) store.assertWritable({projectId:project.id});
+      else assert.throws(() => store.assertWritable({projectId:project.id}),/invalid dispatch/);
     } finally {store.close();}
     assert.deepEqual(readFileSync(log),before);
   };
@@ -168,4 +168,31 @@ test("the rebind command restores a Git ancestor's identity and recorded-path hi
   try { assert.throws(() => execFileSync(process.execPath, [script, "--home", home, "rebind", project.id, checkout], { stdio: "pipe" }), /held|one core/); }
   finally { release(); }
   rmSync(home, { recursive: true, force: true }); rmSync(checkout, { recursive: true, force: true });
+});
+
+test("Git rules replace stale generated session ignores after successful validation", async () => {
+  const {home,sessionId}=setup();
+  const file=join(home,".gitignore");
+  const original=readFileSync(file,"utf8");
+  const canonical=original.split("\n").filter((line)=>line&&!line.startsWith("#"));
+  const authorId=randomUUID(); const authored=`# Authored rule\n/sessions/${authorId}.json\n`;
+  // Previous releases wrote this exact unmarked block repeatedly.
+  writeFileSync(file,authored+canonical.join("\n")+`\n/sessions/${sessionId}.json\n/sessions/${sessionId}.records.jsonl\n`);
+  const manifestFile=join(home,"sessions",`${sessionId}.json`); const valid=readFileSync(manifestFile);
+  const future={...JSON.parse(valid.toString()),schemaVersion:99}; writeFileSync(manifestFile,JSON.stringify(future));
+  const store=new Store({dir:home});
+  try {
+    await store.initializeSessions(); prepareStorageGitFiles(home,store.untrackedSessionPaths());
+    assert.equal(git(home,"check-ignore","--no-index",`sessions/${sessionId}.json`),`sessions/${sessionId}.json`);
+    writeFileSync(manifestFile,valid); await store.initializeSessions();
+    prepareStorageGitFiles(home,store.untrackedSessionPaths());
+    assert.deepEqual(store.untrackedSessionPaths(),[]);
+    assert.throws(()=>git(home,"check-ignore","--no-index",`sessions/${sessionId}.json`));
+    assert.throws(()=>git(home,"check-ignore","--no-index",`sessions/${sessionId}.records.jsonl`));
+    assert.equal(git(home,"check-ignore","--no-index",`sessions/${authorId}.json`),`sessions/${authorId}.json`);
+    const after=readFileSync(file,"utf8"); assert.ok(after.startsWith(authored));
+    assert.equal(after.split("# BEGIN Spex managed storage rules").length,2);
+    prepareStorageGitFiles(home,[]); assert.equal(readFileSync(file,"utf8"),after,"preparation is idempotent");
+    git(home,"add","--",`sessions/${sessionId}.json`,`sessions/${sessionId}.records.jsonl`);
+  } finally {store.close();rmSync(home,{recursive:true,force:true});}
 });

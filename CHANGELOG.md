@@ -14,13 +14,53 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
+### Added
+
+- Desktop and Playbook 13 CLI share session history, continuation,
+  recovery and deletion through one storage format. History preserves
+  Captain and player records, saved settings and recorded graphs.
+- Interrupted sessions offer **Retry** for the saved input and **Discard**
+  to restore the preceding checkpoint when effect evidence allows it.
+  Drafts and queued messages remain available while recovery is pending.
+- A Git workflow selects complete sessions or individual app files from
+  either branch, validates the result, and restores existing project IDs
+  with local path bindings. See the [storage catalog](https://github.com/sublang-ai/spex/blob/main/docs/storage.md)
+  and [Git commands](https://github.com/sublang-ai/spex/blob/main/docs/storage-git.md).
+
 ### Changed
 
-- The player pane's usage line reports tokens only; no monetary figure appears anywhere in the interface, whatever the runtime reported (IR-073).
+- Desktop, server and CLI default to `~/.spex`; `SPEX_HOME` and explicit
+  config/session paths remain supported. Migration replaces desktop
+  sidecars and imports the former default CLI store, removing validated
+  source files after retaining their originals in local migration receipts.
+  Stop old writers and snapshot both `~/.spex` and the former
+  `$XDG_STATE_HOME/playbook` or `~/.local/state/playbook` before upgrading.
+  Do not reopen converted data with older versions; unsupported legacy
+  checkpoints remain readable history.
+- Provider hints stay local; managed Library paths use relative locations
+  and retain sources for rebuilding on another device.
+- The core requires Playbook 13 and Cligent 0.25. Definite provider session
+  rejection permits one fresh attempt; ambiguous failures retain recovery
+  evidence instead of retrying automatically.
+- Git synchronization requires an explicit whole-session choice when both
+  branches changed it. Run a session on one device at a time. Schema 7 does not
+  relocate repository or module paths: different paths permit history only.
+- Failed runtime cleanup keeps the session's lease and project reservation
+  until cleanup or owner shutdown is proven.
+- Desktop and server hosts require macOS or Linux with private POSIX
+  storage. Windows supports the scaffold CLI and browser client.
+- Player usage displays tokens only. Provider-reported costs remain in
+  stored records, without monetary figures in the interface.
 
 ### Fixed
 
-- The spec graph beside the outline draws at its pane's full height again instead of an svg's 150-pixel default, the stacked graph pane keeps a readable floor, and a pane too short for its marks squashes the picture rather than collapsing every package onto one point (IR-072).
+- CLI history refresh stays responsive during continuous writes. Replaced
+  history reloads without duplicate folds or stale viewed markers; queued
+  sends wait for durable settlement and survive refused submissions.
+- Desktop waits for active CLI writers before offering session recovery
+  or management, and refreshes when their leases are released.
+- The spec graph fills its pane and remains readable at short heights
+  instead of collapsing packages onto one point.
 
 ## [0.4.0] - 2026-09-02
 

@@ -55,7 +55,7 @@ Neither action authorizes repeating completed effects or erasing unresolved evid
 The **replay stream** contains Captain/player records, including hidden records, and immutable execution context: participants, settings, role bindings and state-machine definitions.
 Events and checkpoints reference that context, allowing recorded graphs to render without installed playbook modules.
 When a host has no graph definition, history shows only observed states and transitions.
-Activity, summaries and usage are derived from records.
+Summaries and usage are derived from records; current activity comes from the session's writer.
 Valid unknown record kinds and headerless legacy records are not corruption.
 Unsupported recovery versions allow history viewing and deletion, but no continuation; older writers preserve their bytes.
 
@@ -132,9 +132,13 @@ Unsaved drafts and access tokens are not portable session state.
 
 ## Migration and definitions
 
-Stop legacy writers before replacing desktop sidecars with shared manifests.
-Default-home startup imports the former XDG session directory and retains its original files in migration receipts.
+Before upgrading, stop legacy writers and snapshot both `~/.spex` and `$XDG_STATE_HOME/playbook` (or `~/.local/state/playbook` when XDG is unset).
+Migration replaces desktop sidecars with shared manifests.
+Default-home startup also imports the former CLI session directory.
+After validating each converted session, it removes the old active files; original bytes remain in the destination's ignored migration receipts.
+Skipped files remain in place with their reasons reported.
 Explicit homes or session directories are not auto-populated from that old store.
+Use `playbook migrate-session <id>` to migrate a session in an explicitly configured store; `--with <path>` selects configuration files.
 CLI schemas 2–5 and desktop checkpoints without compatible recovery data remain history only.
 Legacy provider tokens cannot become usable hints because their checkpoint binding is unproven.
 

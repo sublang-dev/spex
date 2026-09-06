@@ -7,7 +7,8 @@
 
 This spec covers the project session run view — the Spex screen that renders one live playbook session — spanning its user-visible behavior, its implementation requirements, and its integration coverage.
 The view presents a Captain pane, read-only player panes, and the single Boss composer.
-Everything the view displays derives from the session record stream, which it renders exclusively from the WebSocket protocol that carries it, and the captain glyph vocabulary follows the embedded Playbook Captain shell.
+Conversation and graphs derive from records; session availability and turn activity derive from the core's published state.
+Both arrive through the WebSocket protocol, and the captain glyph vocabulary follows the embedded Playbook Captain shell.
 Coverage replays recorded record-stream fixtures through that protocol, exercising the record-driven rendering contract without live agents.
 
 ## External Behavior
@@ -118,11 +119,12 @@ While a player pane holds a call the core resolved to a role [[core-service-36](
 
 #### run-view-8
 
-The Boss composer shall accept free text and `/`-prefixed command text, be the only input control in the run view, and dispatch or queue each Boss submission by turn state:
+The Boss composer shall accept free text and `/`-prefixed command text, be the only input control in the run view, and dispatch or queue each Boss submission by the core's published turn state [[core-service-32](core-service.md#core-service-32)]:
 
 - while no turn is active, a submission dispatches without queueing, the primary control reading "Send";
 - while a turn is active, a submission queues with a visible queued indicator until the queued submission is dispatched, the primary control reading "Send next" ([DR-041](../decisions/041-chrome-that-fits.md));
 - when the active turn settles, the queued submission dispatches; a refused submission preserves its queued text and draft with the error shown, and uncertainty holds the queue until explicit recovery [[run-view-110](#run-view-110)];
+- a reply or replayed turn-start record does not establish settlement or current activity; a non-live session has no active turn, including after recovery;
 - the primary control's tooltip names its keys — Enter sends, Shift+Enter adds a line — and, while a turn is active, opens by saying the message sends when this turn ends.
 
 #### run-view-106
@@ -150,7 +152,7 @@ While an engagement awaits a Boss reply, the run view shall present the waiting 
 
 #### run-view-10
 
-The run view shall provide an abort control bound to the active turn:
+The run view shall provide an abort control bound to the core's published active turn [[core-service-32](core-service.md#core-service-32)]:
 
 - while a turn is active, the abort control is presented; while no turn is active, it is hidden or disabled;
 - when the abort control is activated, the run view requests abortion of the active turn;
@@ -251,7 +253,7 @@ While a stored session is uncertain, the run view shall show "Interrupted turn" 
 
 #### run-view-125
 
-While a session reports external ownership [[core-service-32](core-service.md#core-service-32)], the run view shall show its history and ownership reason without session mutation controls, preserving drafts and queued input until ownership is idle.
+While a session reports external ownership [[core-service-32](core-service.md#core-service-32)], the run view shall show its history with the loading, failure and retry behavior of stored transcripts [[run-view-33](#run-view-33)] and its ownership reason without session mutation controls, preserving drafts and queued input until ownership is idle.
 
 #### run-view-34
 
@@ -842,7 +844,7 @@ When an integration suite reconnects the app store and delivers a history-replac
 
 #### run-view-126
 
-When an integration suite presents active and unprovable external ownership, it shall verify visible history, the ownership reason, unavailable mutation controls and preserved drafts and queued input [[run-view-125](#run-view-125)].
+When an integration suite presents active and unprovable external ownership, it shall verify history loading and failed-load retry, the ownership reason, unavailable mutation controls and preserved drafts and queued input [[run-view-125](#run-view-125)].
 
 #### run-view-19
 

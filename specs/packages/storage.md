@@ -102,19 +102,55 @@ Before admitting writers to the unified layout, migration shall complete under t
 
 - an unknown version is preserved unchanged and reported; it is never guessed, downgraded or tracked as validated portable data;
 - Git history starts only after validation confirms session recovery fields contain no provider tokens; earlier commits must not contain token-bearing migration inputs;
-- config backups, local state and every ignored family in the catalog [[storage-1](#storage-1)] are excluded by Spex home's tracked `.gitignore` before tracking begins.
-- tracked `.gitattributes` disables line-ending conversion for portable JSON/JSONL files, so Git preserves the bytes used to verify saved recovery state.
 - existing `meta.json` remains `{version:1,importedLegacy?:string[]}` for completed legacy database imports; new migrations use their own receipts.
-- ordinary default-home startup imports the former `$XDG_STATE_HOME/playbook/sessions` or `~/.local/state/playbook/sessions` through Playbook's guarded migration [[1]]; explicit home/session selections suppress discovery, while a different configuration file alone does not.
+
+### storage-17
+
+When preparing Git rules before tracking, the store shall replace its managed rule blocks while preserving authored rules:
+
+- `.gitignore` excludes config backups, local data and all ignored families in the catalog [[storage-1](#storage-1)]; retried migration removes generated ignores for newly validated bundles;
+- `.gitattributes` disables line-ending conversion for portable JSON/JSONL files;
+- generated privacy and byte-preservation rules take precedence over authored exceptions, without accumulating stale blocks.
+
+### storage-18
+
+Where no home or session location is explicitly selected, when the ordinary default-home core starts, the core shall import `$XDG_STATE_HOME/playbook/sessions`, or `~/.local/state/playbook/sessions` when XDG is unset, through Playbook's guarded migration [[1]] before indexing sessions ([DR-050](../decisions/050-shared-storage-cutover.md)):
+
+- a different configuration file alone does not suppress discovery;
+- original manifest/replay bytes are retained in destination receipts before validated conversion removes the source files; skipped inputs remain in place with their reasons reported.
 
 ### storage-10
 
-When synchronizing stored data through Git, the workflow shall follow these rules:
+The storage Git tool shall expose `plan`, `select`, `validate` and `rebind` through `node scripts/storage-git.mjs [--home path] <command>`, using `--home`, then nonempty `SPEX_HOME`, then `~/.spex` to select the home:
 
-- branches share Git ancestry, with one branch for each device's Spex home;
-- desktop and CLI share that branch, merged to or from `main`;
-- all local writers stop during commit, checkout and merge, and each session runs on at most one device at a time;
-- reopening uses Playbook's shared preparation to remove excess permissions from verified user-owned session entries before strict validation [[1]]; `umask 077` keeps files created by Git private before reopening.
+- commands report JSON results on stdout; invalid arguments and refused operations report their cause on stderr and exit nonzero;
+- Git transport and committing remain ordinary Git operations; local writers must stop for checkout, merge and mutating storage commands, and each session runs on at most one device at a time.
+
+### storage-19
+
+When invoked as `plan <ours> <theirs>`, the storage Git tool shall report the resolved revisions, common ancestor and every structured-file or session-bundle choice [[storage-11](#storage-11)] without changing files or the Git index.
+
+### storage-20
+
+When invoked as `select [unit=ours|theirs ...]` during a Git merge, the storage Git tool shall apply the validated selection between `HEAD` and `MERGE_HEAD` under the home and session leases [[storage-14](#storage-14)]:
+
+- reject unknown or duplicate choices, unresolved conflicts and choices contrary to an unambiguous comparison [[storage-11](#storage-11)];
+- validate the complete candidate before applying files [[storage-12](#storage-12)]; validation failure leaves working files and index unchanged;
+- write or delete each selected session's replay before its manifest, clear hints and viewed markers when its selected bundle differs from `HEAD`, and stage every selected path;
+- report filesystem failures without claiming success; retrying selection repairs an interrupted application before reopening.
+
+### storage-21
+
+When invoked as `validate`, the storage Git tool shall reserve the home and validate the selected tree [[storage-12](#storage-12)] without staging or changing file contents.
+
+### storage-22
+
+When invoked as `rebind <project-id> <path> [--alias path ...] [--revision ancestor]`, the storage Git tool shall bind an existing identity under the home lease and rescan its history [[storage-6](#storage-6)]:
+
+- the destination must be a Git worktree root;
+- supplied aliases replace the alias list; omitting them preserves it;
+- `--revision` restores that identity's exact registry entry from a selected ancestor of the current branch; it requires Spex home to be a Git worktree root;
+- the result includes the bound project and remaining storage diagnostics.
 
 ### storage-11
 
@@ -136,13 +172,15 @@ When selecting stored data during a Git merge, the validator shall compare both 
 
 ### storage-12
 
-Before reopening selected state, the validator shall validate the complete selected tree without modifying file contents, after permission preparation [[storage-10](#storage-10)]:
+Before reopening selected state, the validator shall validate the complete selected tree without modifying file contents, after Playbook's preparation removes excess permissions from verified user-owned session entries and refuses unsafe paths [[1]]:
 
 - file versions, closed encodings and checkpoint/digest relationships are valid [[storage-2](#storage-2)] [[storage-3](#storage-3)] [[storage-4](#storage-4)] [[storage-5](#storage-5)] [[1]];
 - open artifact-source identities and ranks are unique within a project [[core-service-42](core-service.md#core-service-42)], `after` dependency links name existing intents and form no cycle, and dispatch targets still present belong to the same project with valid turn boundaries;
 - deleted session targets retain the existing ledger re-derivation behavior [[core-service-70](core-service.md#core-service-70)]; a missing session alone is not permission to discard a verdict or repeat work;
 - missing registry IDs and unresolved `cwd` values are reported and their records remain unlisted, without blocking unrelated valid projects or automatically restoring registrations;
-- incompatible modules or unsupported checkpoint relocation permit history only; invalid structured data blocks writes and reports the failing file and reason.
+- incompatible modules or unsupported checkpoint relocation permit history only;
+- invalid session data blocks that session's execution and recovery, preserving lease-checked deletion; invalid intent data blocks affected projects and dependent queues;
+- invalid shared files block operations that require them; diagnostics name the failing file and reason, while startup, unrelated valid projects and independent configuration or preference edits remain available.
 
 ### storage-13
 
@@ -166,13 +204,18 @@ When an integration suite migrates a legacy store with writers stopped and opens
 - session association after registration and restoration of existing project IDs [[storage-6](#storage-6)];
 - shared module path resolution [[storage-7](#storage-7)];
 - library rebuilding from retained sources [[storage-8](#storage-8)];
-- restart-safe migration and token-free Git ancestry [[storage-9](#storage-9)].
+- restart-safe migration and token-free Git ancestry [[storage-9](#storage-9)];
+- refreshed Git rules after a migration retry [[storage-17](#storage-17)];
+- ordinary-default discovery, retained inputs and explicit-location isolation [[storage-18](#storage-18)].
 
 ### storage-16
 
 When an integration suite merges two real Git branches containing sessions, projects and intent logs, it shall verify:
 
-- stopped writers and reopening after a real Git checkout with umask `022` [[storage-10](#storage-10)];
+- command results and refusals through the documented entry point [[storage-10](#storage-10)];
+- an unchanged index after planning and refused selection, followed by staged complete choices [[storage-19](#storage-19)] [[storage-20](#storage-20)];
+- stopped writers and reopening after a real Git checkout with umask `022` [[storage-21](#storage-21)];
+- restored identity and aliases through the rebind command [[storage-22](#storage-22)];
 - every whole-unit choice, including clean text merges and deletion [[storage-11](#storage-11)];
 - reports of unmatched projects and sessions, and rejection of duplicate sources/ranks, cycles, invalid dispatches and damaged bundles [[storage-12](#storage-12)];
 - no repetition of actions omitted from selected history [[storage-13](#storage-13)];

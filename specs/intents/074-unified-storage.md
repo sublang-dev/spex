@@ -49,4 +49,5 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 - The provider-free waiting-question fixture passed its UI reply and ledger badge `1` to `0` transition, then quit cleanly and restored the Node ABI.
 - The earlier Spex attempt counted initialization as output and failed its manual watchdog; it is not a valid live result. Four regressions verify the corrected output gate.
 - Corrected Spex live acceptance passed on `0f73693` with Playbook `3444353`: actual provider text before abort, valid replay, process exit `0` and restored Node ABI.
+- Supplied-review fixes add damaged-store isolation, migration/CLI and activity regressions, plus saved-context and Git effect-recovery checks; the preceding release runs are historical, and the changed final candidate still requires release acceptance.
 - Detailed results and remaining release gates are recorded in [release preparation](../../docs/releases/0.5.0-preparation.md).

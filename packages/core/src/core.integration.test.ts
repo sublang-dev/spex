@@ -19,7 +19,8 @@ import { openSessionStore, createSessionStore, validateSessionManifest } from "@
 import { openSessionHost, loadLaunchPlan, executionConfigFromPlan } from "@sublang/playbook/session-host";
 
 import { CoreService } from "./service.js";
-import { templatePath } from "./config.js";
+import { templatePath, resolveModulePath, REGISTRY_CONTRACT } from "./config.js";
+import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 import { fakeAdapterImports, type FakeAdapterStats } from "./testing/fake-adapter.js";
 import { createScriptedCaptain } from "./testing/scripted-captain.js";
@@ -2276,3 +2277,222 @@ for (const action of ["retry", "discard"] as const) {
     }
   });
 }
+
+// Review regressions exercise the public protocol with independent files.
+test("core-service-86: damaged sessions refuse only their own execution and remain deletable", async (t) => {
+  const harness = await startHarness(VALID_CONFIG, {realShell:true});
+  const client = new Client(harness.service.port()); await client.open();
+  t.after(async () => {client.close(); await harness.service.stop(); rmSync(harness.dir,{recursive:true,force:true});});
+  const project = await client.expectOk("project.register", {path:harness.projectDir});
+  const damaged = await client.expectOk("session.create", {projectId:project.id});
+  await client.expectOk("session.dispose", {sessionId:damaged.id});
+  const manifestFile = join(harness.dataDir,"sessions",`${damaged.id}.json`);
+  const manifest = JSON.parse(readFileSync(manifestFile,"utf8"));
+  manifest.replay.sha256 = "0".repeat(64); writeFileSync(manifestFile,JSON.stringify(manifest));
+  await harness.service["syncForeignSessions"]();
+  const reports = await client.expectOk("storage.diagnostics", {});
+  assert.ok(reports.some((report) => report.blocking && report.file.endsWith(`${damaged.id}.json`)));
+  for (const type of ["turn.submit","session.retry","session.discard"] as const) {
+    const reply = type === "turn.submit" ? await client.command(type,{sessionId:damaged.id,text:"resume"}) : await client.command(type,{sessionId:damaged.id});
+    assert.ok(!reply.ok && reply.error.code === "invalid_request", JSON.stringify(reply));
+    assert.ok(!reply.ok && reply.error.message.includes(`${damaged.id}.json`));
+  }
+  await client.expectOk("config.edit", {op:{kind:"captain.set",patch:{instruction:"Independent edit"}}});
+  await client.expectOk("intent.queue", {projectId:project.id,text:"Healthy queue"});
+  const healthy = await client.expectOk("session.create", {projectId:project.id});
+  await client.expectOk("session.viewed", {sessionId:healthy.id,turnId:0});
+  await client.expectOk("session.delete", {sessionId:damaged.id});
+  assert.equal(existsSync(manifestFile),false);
+  assert.equal((await client.expectOk("session.list", {})).find((session) => session.id === healthy.id)?.live,true);
+});
+
+for (const defect of ["completed JSON", "cycle", "duplicate source", "foreign act"] as const) {
+  test(`core-service-86: ${defect} intent damage is isolated at startup`, async (t) => {
+    const harness = await startHarness(VALID_CONFIG, {realShell:true});
+    let service = harness.service; let client = new Client(service.port()); await client.open();
+    t.after(async () => {client.close(); await service.stop(); rmSync(harness.dir,{recursive:true,force:true});});
+    const bad = await client.expectOk("project.register", {path:harness.projectDir});
+    const register = async (name:string) => {const path=join(harness.dir,name); mkdirSync(path); execFileSync("git",["init","-q",path]); return client.expectOk("project.register",{path});};
+    const good = await register("good"); const dependent = await register("dependent");
+    const first = await client.expectOk("intent.queue", {projectId:bad.id,text:"A",source:{kind:"issue",ref:"1"}});
+    const second = await client.expectOk("intent.queue", {projectId:bad.id,text:"B"});
+    const healthy = await client.expectOk("intent.queue", {projectId:good.id,text:"Healthy"});
+    await client.expectOk("intent.queue", {projectId:dependent.id,text:"After A",afterIntentId:first.id});
+    client.close(); await service.stop();
+    const file=join(harness.dataDir,"intents",`${bad.id}.jsonl`);
+    const line=(act:object) => JSON.stringify({v:1,...act})+"\n";
+    if (defect === "completed JSON") appendFileSync(file,"broken JSON\n");
+    if (defect === "cycle") appendFileSync(file,line({act:"link",id:first.id,afterId:second.id})+line({act:"link",id:second.id,afterId:first.id}));
+    if (defect === "duplicate source") appendFileSync(file,line({act:"queue",intent:{id:randomUUID(),projectId:bad.id,text:"Duplicate",rank:"z",createdAt:1,source:{kind:"issue",ref:"1"}}}));
+    if (defect === "foreign act") appendFileSync(file,line({act:"edit",id:healthy.id,text:"Cross-project corruption"}));
+    const before=readFileSync(file);
+    service=await CoreService.start({token:"test",dataDir:harness.dataDir,configPath:join(harness.dir,"playbook.config.yaml"),env:{},home:join(harness.dir,"home"),watchConfig:false,adapterImports:fakeAdapterImports({}).imports});
+    client=new Client(service.port()); await client.open();
+    const reports=await client.expectOk("storage.diagnostics",{});
+    assert.ok(reports.some((report)=>report.blocking&&report.file.includes(bad.id)));
+    assert.ok(reports.some((report)=>report.blocking&&report.file.includes(dependent.id)));
+    for (const project of [bad,dependent]) {
+      const reply=await client.command("intent.queue",{projectId:project.id,text:"Refused"});
+      assert.ok(!reply.ok&&reply.error.code==="invalid_request",JSON.stringify(reply));
+      assert.ok(!reply.ok&&reply.error.message.includes(project.id));
+    }
+    await client.expectOk("intent.edit",{intentId:healthy.id,text:"Still editable"});
+    await client.expectOk("intent.queue",{projectId:good.id,text:"Still queueable"});
+    await client.expectOk("config.edit",{op:{kind:"captain.set",patch:{instruction:"Still configurable"}}});
+    const session=await client.expectOk("session.create",{projectId:good.id});
+    await client.expectOk("session.viewed",{sessionId:session.id,turnId:0});
+    assert.deepEqual(readFileSync(file),before,"invalid log bytes preserved");
+  });
+}
+
+for (const file of ["projects.json", "local/project-paths.json", "prefs.json"]) {
+  test(`core-service-86: invalid ${file} leaves independent configuration available`, async (t) => {
+    const harness=await startHarness(); let service=harness.service; let client=new Client(service.port()); await client.open();
+    t.after(async()=>{client.close(); await service.stop(); rmSync(harness.dir,{recursive:true,force:true});});
+    const project=await client.expectOk("project.register",{path:harness.projectDir});
+    const session=await client.expectOk("session.create",{projectId:project.id});
+    await client.expectOk("session.dispose",{sessionId:session.id});
+    client.close(); await service.stop();
+    const path=join(harness.dataDir,file); writeFileSync(path,"{bad JSON}");
+    service=await CoreService.start({token:"test",dataDir:harness.dataDir,configPath:join(harness.dir,"playbook.config.yaml"),env:{},home:join(harness.dir,"home"),watchConfig:false});
+    client=new Client(service.port()); await client.open();
+    assert.ok((await client.expectOk("storage.diagnostics",{})).some((report)=>report.blocking&&report.file.endsWith(file)));
+    await client.expectOk("config.edit",{op:{kind:"captain.set",patch:{instruction:"Independent config"}}});
+    const refused=file==="prefs.json" ? await client.command("session.viewed",{sessionId:session.id,turnId:1}) : await client.command("project.register",{path:harness.projectDir});
+    assert.ok(!refused.ok&&refused.error.code==="invalid_request",JSON.stringify(refused));
+    if (file !== "prefs.json") {
+      const destination=join(harness.dir,"must-not-be-created");
+      const creation=await client.command("project.create",{path:destination});
+      assert.ok(!creation.ok&&creation.error.code==="invalid_request",JSON.stringify(creation));
+      assert.equal(existsSync(destination),false,"registry refusal precedes scaffolding or Git writes");
+    }
+    assert.equal(readFileSync(path,"utf8"),"{bad JSON}");
+  });
+}
+
+/** Pause after a real lease read to reproduce a scan begun before local admission. */
+test("core-service-32: a pending foreign scan cannot overwrite locally acquired ownership", async (t) => {
+  const harness=await startHarness(VALID_CONFIG,{realShell:true});
+  const client=new Client(harness.service.port()); await client.open();
+  t.after(async()=>{client.close(); await harness.service.stop(); rmSync(harness.dir,{recursive:true,force:true});});
+  const project=await client.expectOk("project.register",{path:harness.projectDir});
+  const session=await client.expectOk("session.create",{projectId:project.id});
+  await client.expectOk("session.dispose",{sessionId:session.id});
+  const store=harness.service["store"]; const shared=store.sessionStore();
+  let release!:()=>void; const paused=new Promise<void>((resolve)=>{release=resolve;});
+  let observed!:()=>void; const entered=new Promise<void>((resolve)=>{observed=resolve;});
+  let intercept=true;
+  store.sessionStore=()=>({...shared,readLeaseState:async(id)=>{
+    const result=await shared.readLeaseState(id);
+    if (intercept&&id===session.id) {intercept=false; observed(); await paused; return "active";}
+    return result;
+  }});
+  const scan=store.refreshSession(session.id,false); await entered;
+  try {
+    await client.expectOk("turn.submit",{sessionId:session.id,text:"Local continuation"});
+    release(); await scan;
+    const listed=(await client.expectOk("session.list",{})).find((item)=>item.id===session.id)!;
+    assert.equal(listed.live,true); assert.equal(listed.externalWriter,undefined);
+    assert.equal(store.describeSession(session.id)?.externalWriter,undefined);
+    await client.waitFor((message)=>message.type==="session.state"&&message.session.id===session.id&&message.session.turns===1&&message.session.turnActive===false);
+    assert.ok(client.messages.filter((message)=>message.type==="session.state"&&message.session.id===session.id).every((message)=>message.type!=="session.state"||message.session.externalWriter===undefined));
+  } finally {release(); await scan;}
+});
+
+/** The replay terminal record does not grant permission to end the transaction. */
+test("core-service-32/39: shutdown waits for a paused durable settlement after runtime completion", async (t) => {
+  const harness=await startHarness(VALID_CONFIG,{realShell:true});
+  const client=new Client(harness.service.port()); await client.open();
+  let stopped=false;
+  let release!:()=>void;
+  t.after(async()=>{release?.(); client.close(); if(!stopped) await harness.service.stop(); rmSync(harness.dir,{recursive:true,force:true});});
+  const store=harness.service["store"]; const shared=store.sessionStore();
+  const paused=new Promise<void>((resolve)=>{release=resolve;});
+  let settling!:()=>void; const entered=new Promise<void>((resolve)=>{settling=resolve;});
+  store.sessionStore=()=>({...shared,acquire:async(id)=>{
+    const lease=await shared.acquire(id);
+    return {...lease,settle:async(...args:Parameters<typeof lease.settle>)=>{settling(); await paused; return lease.settle(...args);}};
+  }});
+  const project=await client.expectOk("project.register",{path:harness.projectDir});
+  const session=await client.expectOk("session.create",{projectId:project.id});
+  await client.expectOk("subscribe",{channel:{kind:"session",sessionId:session.id}});
+  await client.expectOk("turn.submit",{sessionId:session.id,text:"Settle exactly once"});
+  await entered;
+  const manifestFile=join(harness.dataDir,"sessions",`${session.id}.json`);
+  assert.equal(JSON.parse(readFileSync(manifestFile,"utf8")).state,"uncertain");
+  await client.waitFor((message)=>message.type==="record"&&message.record.type==="turn_finished");
+  const listed=(await client.expectOk("session.list",{})).find((item)=>item.id===session.id)!;
+  assert.equal(listed.turnActive,true,"durable settlement is still pending");
+  const busy=await client.command("turn.submit",{sessionId:session.id,text:"Too early"});
+  assert.ok(!busy.ok&&busy.error.code==="busy");
+  let finished=false; const stop=harness.service.stop().then(()=>{finished=true;stopped=true;});
+  try {
+    await new Promise<void>((resolve)=>setImmediate(resolve));
+    assert.equal(finished,false,"shutdown joins the pending transaction");
+    release(); await stop;
+    const checked=await shared.validate(session.id);
+    assert.equal(checked.manifest.state,"settled"); assert.equal(checked.integrityValid,true);
+    assert.equal((checked.manifest as {snapshot?:{sequences?:{turn:number}}}).snapshot?.sequences?.turn,1);
+  } finally {release(); await stop;}
+});
+
+
+test("core-service-81: saved Captain, player context and graphs survive removal of the playbook module", async (t) => {
+  const moduleDir=mkdtempSync(join(tmpdir(),"spex-removed-module-"));
+  const registry=resolveModulePath("@sublang/playbook/code/registry")!;
+  const wrapper=join(moduleDir,"code.registry.mjs");
+  writeFileSync(wrapper,`export {default} from ${JSON.stringify(pathToFileURL(registry).href)};\nexport const spexRegistryContract = ${REGISTRY_CONTRACT};\n`);
+  writeFileSync(join(moduleDir,"code.fsm.ts"),readFileSync(join(dirname(registry),"code.fsm.ts")));
+  const harness=await startHarness(VALID_CONFIG.replace("@sublang/playbook/code/registry",wrapper),{realShell:true});
+  let service=harness.service; let client=new Client(service.port()); await client.open();
+  t.after(async()=>{client.close(); await service.stop(); rmSync(harness.dir,{recursive:true,force:true}); rmSync(moduleDir,{recursive:true,force:true});});
+  const project=await client.expectOk("project.register",{path:harness.projectDir});
+  const session=await client.expectOk("session.create",{projectId:project.id});
+  await client.expectOk("turn.submit",{sessionId:session.id,text:"Retained history"});
+  await client.waitFor((message)=>message.type==="session.state"&&message.session.id===session.id&&message.session.turns===1&&message.session.turnActive===false);
+  await client.expectOk("session.dispose",{sessionId:session.id});
+  const before=await client.expectOk("history.get",{sessionId:session.id});
+  const context=before.records.find((entry)=>(entry.record as {type?:string}).type==="session_context")!.record as unknown as {configuration:{captain:{adapter:string};players:{id:string}[]};graphs:{playbookId:string;graph:unknown}[]};
+  assert.equal(context.configuration.captain.adapter,"claude");
+  assert.equal(context.configuration.players[0].id,"dev.coder");
+  assert.ok(context.graphs.find((entry)=>entry.playbookId==="code")?.graph,"graph stored with context");
+  client.close(); await service.stop(); rmSync(moduleDir,{recursive:true,force:true});
+  let imports=0;
+  service=await CoreService.start({token:"test",dataDir:harness.dataDir,configPath:join(harness.dir,"playbook.config.yaml"),env:{},home:join(harness.dir,"home"),watchConfig:false,loadModule:async()=>{imports++; throw new Error("playbook module removed");}});
+  client=new Client(service.port()); await client.open();
+  assert.equal((await client.expectOk("config.get",{})).status,"invalid");
+  const importsAtStartup=imports;
+  assert.deepEqual(await client.expectOk("history.get",{sessionId:session.id}),before);
+  const listed=(await client.expectOk("session.list",{})).find((item)=>item.id===session.id)!;
+  assert.deepEqual(listed.players,session.players); assert.deepEqual(listed.initialVisible,session.initialVisible);
+  assert.equal(listed.live,false); assert.equal(listed.turnActive,false);
+  assert.equal(imports,importsAtStartup,"reading saved history and graphs imports no module");
+});
+
+test("core-service-86: unreadable legacy sidecars and forge cache preserve unrelated startup", async (t) => {
+  const harness=await startHarness(VALID_CONFIG,{realShell:true});
+  let service=harness.service; let client=new Client(service.port()); await client.open();
+  t.after(async()=>{client.close(); await service.stop(); rmSync(harness.dir,{recursive:true,force:true});});
+  const project=await client.expectOk("project.register",{path:harness.projectDir});
+  const prior=await client.expectOk("session.create",{projectId:project.id});
+  await client.expectOk("session.dispose",{sessionId:prior.id});
+  client.close(); await service.stop();
+  const sidecar=join(harness.dataDir,"sessions",`${randomUUID()}.spex.json`);
+  const malformed=join(harness.dataDir,"sessions",`${randomUUID()}.spex.json`);
+  const malformedBytes=JSON.stringify({id:"../outside-store",projectId:project.id,players:[],initialVisible:[]});
+  const cache=join(harness.dataDir,"forge-cache.json");
+  writeFileSync(sidecar,"{broken sidecar",{mode:0o600}); writeFileSync(malformed,malformedBytes,{mode:0o600}); writeFileSync(cache,"{broken cache");
+  service=await CoreService.start({token:"test",dataDir:harness.dataDir,configPath:join(harness.dir,"playbook.config.yaml"),env:{},home:join(harness.dir,"home"),watchConfig:false,adapterImports:fakeAdapterImports({}).imports});
+  client=new Client(service.port()); await client.open();
+  const diagnostics=await client.expectOk("storage.diagnostics",{});
+  assert.ok(diagnostics.some((entry)=>entry.file===sidecar&&entry.reason.length>0));
+  assert.ok(diagnostics.some((entry)=>entry.file===malformed&&entry.reason.length>0));
+  assert.ok(diagnostics.some((entry)=>entry.file===cache&&!entry.blocking));
+  assert.ok((await client.expectOk("session.list",{})).some((session)=>session.id===prior.id));
+  await client.expectOk("config.edit",{op:{kind:"captain.set",patch:{instruction:"Still available"}}});
+  const created=await client.expectOk("session.create",{projectId:project.id});
+  assert.equal(created.live,true);
+  assert.equal(readFileSync(sidecar,"utf8"),"{broken sidecar");
+  assert.equal(readFileSync(malformed,"utf8"),malformedBytes);
+  assert.equal(readFileSync(cache,"utf8"),"{broken cache");
+});

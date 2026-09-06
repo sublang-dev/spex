@@ -489,8 +489,8 @@ test("DR-035: a ruled turn never re-summons — plain chat after the verdict doe
   const { store, projectId } = newProjectStore();
   addSession(store, projectId, "s1");
   queueIntent(store, projectId, "A", "i");
-  store.stampIntentDispatch("A", "s1", 1, 1000);
   beginTurn(store, "s1", 1, "Intent A", 1000);
+  store.stampIntentDispatch("A", "s1", 1, 1000);
   finishTurn(store, "s1", 1, 2000);
   const lanes = [lane("s1", projectId, false)];
 
