@@ -33,6 +33,7 @@ Omit `--desktop` for a quick mid-development pass.
 No provider or sign-in is involved, and the render boots on a scratch
 state root, so a running Spex desktop does not block it; a failure
 names its stage.
+Browser journeys run with one worker locally, in CI and in this smoke.
 
 To resume after a corrected failure, use `--from=<stage>` only after every
 earlier stage has passed on its current inputs. For example,

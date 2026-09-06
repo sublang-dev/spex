@@ -133,7 +133,7 @@ try {
   // a real core with substitute agents. The browser install is a
   // cached no-op after the first run.
   if (selected("browser")) run("browser", "npx", ["playwright", "install", "chromium"]);
-  if (selected("journeys")) run("journeys", "npm", ["run", "e2e"]);
+  if (selected("journeys")) run("journeys", "npm", ["run", "journeys", "-w", "e2e", "--", "--workers=1"]);
   if (selected("core-round-trip")) await coreRoundTrip();
   // The end-user pass: pack the real tarball, install it into an
   // isolated prefix, and walk the README journeys (fresh scaffold,

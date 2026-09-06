@@ -2496,3 +2496,34 @@ test("core-service-86: unreadable legacy sidecars and forge cache preserve unrel
   assert.equal(readFileSync(malformed,"utf8"),malformedBytes);
   assert.equal(readFileSync(cache,"utf8"),"{broken cache");
 });
+
+test("storage-15: repeated default-home startup does not grow leases for a refused sidecar", async (t) => {
+  const root=mkdtempSync(join(tmpdir(),"spex-migration-refusal-"));
+  const home=join(root,"home");const dataDir=join(home,".spex");const sessionsDir=join(dataDir,"sessions");
+  const configPath=join(dataDir,"playbook","playbook.config.yaml");mkdirSync(dirname(configPath),{recursive:true});writeFileSync(configPath,VALID_CONFIG);
+  const projectPath=join(root,"project");mkdirSync(projectPath);execFileSync("git",["init","-q",projectPath]);
+  const options={token:"test",configPath,dataDir,home,env:{},watchConfig:false};
+  let service=await CoreService.start(options);let client=new Client(service.port());await client.open();
+  t.after(async()=>{client.close();await service.stop();rmSync(root,{recursive:true,force:true});});
+  const project=await client.expectOk("project.register",{path:projectPath});
+  client.close();await service.stop();
+  const id=randomUUID();const sidecar=join(sessionsDir,`${id}.spex.json`);
+  const valid={v:1,id,projectId:project.id,createdAt:1,endedAt:2,live:false,players:[],initialVisible:[]};
+  const refused=JSON.stringify({...valid,v:99});writeFileSync(sidecar,refused,{mode:0o600});
+  const guards=()=>readdirSync(sessionsDir).filter((name)=>name.startsWith(`.${id}.lock`)).sort();
+  for(let restart=0;restart<3;restart++){
+    service=await CoreService.start(options);client=new Client(service.port());await client.open();
+    assert.ok((await client.expectOk("storage.diagnostics",{})).some((entry)=>entry.file===sidecar&&entry.reason.includes("invalid legacy desktop")));
+    assert.equal(readFileSync(sidecar,"utf8"),refused);assert.deepEqual(guards(),[]);
+    client.close();await service.stop();
+  }
+  writeFileSync(sidecar,JSON.stringify(valid));
+  service=await CoreService.start(options);client=new Client(service.port());await client.open();
+  assert.equal(existsSync(sidecar),false);
+  assert.equal(JSON.parse(readFileSync(join(sessionsDir,`${id}.json`),"utf8")).state,"history-only");
+  assert.ok((await client.expectOk("session.list",{})).some((session)=>session.id===id));
+  const migratedGuards=guards();assert.equal(migratedGuards.length,1);
+  client.close();await service.stop();
+  service=await CoreService.start(options);client=new Client(service.port());await client.open();
+  assert.deepEqual(guards(),migratedGuards,"successful migration is not retried on the next startup");
+});

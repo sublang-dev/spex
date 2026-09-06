@@ -15,7 +15,8 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 2 : undefined,
+  // Each journey runs a browser and a real core; avoid host-dependent load.
+  workers: 1,
   timeout: live ? 10 * 60_000 : 45_000,
   expect: { timeout: live ? 60_000 : 15_000 },
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
