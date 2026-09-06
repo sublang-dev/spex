@@ -5,8 +5,7 @@
 
 ## Status
 
-In progress; implementation verified against the packed candidate (2026-09-05).
-Published Playbook adoption, remaining manual checks, CI and publication remain pending.
+Done (2026-09-06): released as Spex app 0.5.0 on Playbook 13.0.0 and Cligent 0.25.0.
 
 ## Intent
 
@@ -19,8 +18,8 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 - [x] Add whole-unit Git selection and pre-reopen validation.
 - [x] Render historical context/graphs and manage sessions from either host.
 - [x] Complete the owning packages' integration matrices against the packed candidate.
-- [ ] Adopt published Playbook in the registry lockfile.
-- [ ] Complete coordinated release acceptance and publication.
+- [x] Adopt published Playbook in the registry lockfile.
+- [x] Complete coordinated release acceptance and publication.
 
 ## Tasks
 
@@ -50,4 +49,5 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 - The earlier Spex attempt counted initialization as output and failed its manual watchdog; it is not a valid live result. Four regressions verify the corrected output gate.
 - Corrected Spex live acceptance passed on `0f73693` with Playbook `3444353`: actual provider text before abort, valid replay, process exit `0` and restored Node ABI.
 - Supplied-review fixes add damaged-store isolation, migration/CLI and activity regressions, plus saved-context and Git effect-recovery checks; the preceding release runs are historical, and the changed final candidate still requires release acceptance.
-- Detailed results and remaining release gates are recorded in [release preparation](../../docs/releases/0.5.0-preparation.md).
+- Final acceptance on the published closure passed: CI for the tagged candidate, the hermetic smoke with the desktop stage, the live desktop smoke, and the manual checklist on migrated data.
+- Detailed results are recorded in [release preparation](../../docs/releases/0.5.0-preparation.md).

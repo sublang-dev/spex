@@ -14,7 +14,7 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-09-05
+## [0.5.0] - 2026-09-06
 
 ### Added
 
