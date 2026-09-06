@@ -46,8 +46,8 @@ npm run smoke:desktop
 ```
 
 After a successful build, use `SPEX_SMOKE_BUILD_READY=1 npm run
-smoke:desktop` only while its source, dependencies and build settings
-remain unchanged. This reuses the build; ABI setup and restoration still run.
+smoke:desktop` only while its build inputs remain unchanged. This reuses the
+build; ABI setup and restoration still run.
 
 Boots the real desktop app against a scratch home and walks the
 critical path over the app's own socket: seeded config valid →
@@ -59,6 +59,10 @@ Needs a locally signed-in Claude adapter; budget ~5–8 minutes.
 Provider-side flakes may be retried or waived with the reason
 recorded beside the tag; app-side failures block.
 
+Add `SPEX_SMOKE_MANUAL=1` to enable the scratch profile's abort notification
+and keep the ended session open for inspection. Press Enter to finish;
+after five minutes the check fails and cleans up. No extra agent turn runs.
+
 ## 2. Manual pass — desktop app
 
 Launch: `npm start`.
@@ -69,8 +73,8 @@ Launch: `npm start`.
 | Palette (⌘P) → "Try the Academy example" | Project seeds, registers, and becomes current; repeat click reopens it without error |
 | Specs tab over Academy | The Packages branch renders its collection directories (the migrated corpus has no compositions, so no Compositions branch appears); filters and search work; an item with citations shows outbound citation rows, cited items show grouped inbound backlinks, and jumps land and flash |
 | Playbooks surface | `/code`, `/review`, and `/decide` pipelines show source, gears, and state machine; example card stages all four artifacts; prefill fills the compile form (roles pre-mapped) |
-| (The live run is automated by `npm run smoke:desktop`; spot-check the dock badge and notification banners during it) | Badge counts parked/failed sessions; banners appear per prefs |
-| Dashboard | The run's usage appears; attention queue lists any parked/aborted turn |
+| Live run (`npm run smoke:desktop`, optionally with the manual pause) | Native notification follows the scratch preferences; dock badge matches Dashboard attention. A cleanly ended standalone session leaves both counts at zero. |
+| Session history and Dashboard | The aborted turn remains readable; player panes show usage only if the provider reported it. Dashboard lists outstanding questions, permissions, failures or finished work awaiting review; an ended standalone session creates none. |
 | Settings | A Captain agent edit round-trips (adapter, model, effort, permissions); config stays valid |
 | Dark theme (OS toggle) | Sidebar mark, panes, and spec view stay legible |
 

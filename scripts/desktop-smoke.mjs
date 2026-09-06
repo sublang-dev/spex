@@ -15,10 +15,12 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(fileURLToPath(new URL(".", import.meta.url)));
 const BUDGET_MS = 8 * 60_000;
+const manual = process.env.SPEX_SMOKE_MANUAL === "1";
 // A real but trivial coding task: the judge must classify this as
 // work, or the Captain answers it itself and no player ever runs.
 // The Academy copy is a throwaway scratch repo, so the edit is safe.
@@ -181,6 +183,14 @@ try {
   if (config.summary.captain.adapter !== "claude") {
     throw new Error("seeded captain is not the single-vendor claude block");
   }
+  if (manual) {
+    await command("config.edit", {
+      op: {
+        kind: "notifications.set",
+        prefs: { ...config.summary.notifications, turn_aborted: "desktop" },
+      },
+    });
+  }
 
   at("academy");
   const project = await command("project.create", {
@@ -259,6 +269,24 @@ try {
     60_000,
     "the ended session",
   );
+
+  if (manual) {
+    at("manual-review");
+    say(`scratch profile: ${scratch}; session: ${session.id}`);
+    const input = createInterface({ input: process.stdin, output: process.stdout });
+    let timer;
+    try {
+      await Promise.race([
+        input.question("Inspect history, notification and badge; press Enter to close.\n"),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("manual review timed out after 5 minutes")), 300_000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      input.close();
+    }
+  }
 
   at("teardown");
   socket.close();
