@@ -6,7 +6,7 @@
 ## Status
 
 In progress; implementation verified against the packed candidate (2026-09-05).
-Published Playbook adoption, live/manual acceptance and publication remain pending.
+Published Playbook adoption, remaining manual checks, CI and publication remain pending.
 
 ## Intent
 
@@ -42,7 +42,11 @@ Implement [DR-045](../decisions/045-unified-session-storage.md) using Playbook-o
 ## Verification
 
 - Required acceptance behavior is specified in storage, core-service, projects, run-view and playbook-library.
-- Against packed Playbook `a6ff03b9` and published Cligent `0.25.0`, 833 tests and 40 browser journeys pass across bounded runs, including corrected fixture cases; core round-trip, packed CLI, Electron render and native ABI restoration pass.
-- The installed Playbook files match the candidate; registry lockfile adoption awaits publication.
-- Live checks await explicit approval after automatic review refused execution; manual desktop acceptance awaits an unlocked Mac.
+- The baseline packed candidate passed 833 tests and 40 browser journeys across bounded runs; core round-trip, packed CLI, Electron render and native ABI restoration passed.
+- Updated replay handling passed 88 core checks and 18 browser journeys; the final Playbook `3444353` changes only the native-session-ID sanitizer alias, covered by three owning-package regressions, and all 99 installed files match.
+- Playbook passed 1,743 tests, exact-candidate CI and all six live cases; publication awaits its manual terminal UX check, then Spex's registry adoption.
+- Native navigation, settings, themes, saved graph/recovery controls and Dashboard attention passed; OS badges and notification banners remain unobserved.
+- The provider-free waiting-question fixture passed its UI reply and ledger badge `1` to `0` transition, then quit cleanly and restored the Node ABI.
+- The earlier Spex attempt counted initialization as output and failed its manual watchdog; it is not a valid live result. Four regressions verify the corrected output gate.
+- Corrected Spex live acceptance passed on `0f73693` with Playbook `3444353`: actual provider text before abort, valid replay, process exit `0` and restored Node ABI.
 - Detailed results and remaining release gates are recorded in [release preparation](../../docs/releases/0.5.0-preparation.md).
