@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { livePlayerOutput } from "./live-output.mjs";
 
 const root = dirname(fileURLToPath(new URL(".", import.meta.url)));
 const BUDGET_MS = 8 * 60_000;
@@ -211,7 +212,7 @@ try {
   // Dispatch evidence: the first player prompt of the turn — the
   // coder, since /code opens on it; player ids are roster lanes
   // ("dev.coder", DR-032), not playbook-prefixed names. Live-agent
-  // evidence: that player's first streamed event. Real routing +
+  // evidence: that player's first text, thinking or tool activity. Routing +
   // first-token latency sit inside the budget (DR-020).
   const dispatched = await waitFor(
     () => {
@@ -233,19 +234,15 @@ try {
   const playerId = String(dispatched.record.playerId ?? "");
   say(`coder dispatched: ${playerId}`);
   await waitFor(
-    () =>
-      records.find(
-        (m) =>
-          m.record?.type === "player_event" &&
-          String(m.record.playerId ?? "") === playerId,
-      ),
+    () => livePlayerOutput(records, dispatched),
     BUDGET_MS,
     "live agent output",
   );
   say("live agent output observed");
 
   at("abort");
-  await command("turn.abort", { sessionId: session.id });
+  const aborted = await command("turn.abort", { sessionId: session.id });
+  if (!aborted.aborted) throw new Error("the turn ended before the abort path could be exercised");
   await waitFor(
     () => records.find((m) => m.record?.type === "turn_aborted"),
     60_000,

@@ -18,7 +18,7 @@
     "start:server": "node scripts/start-server.mjs",
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test:scripts && npm test --workspaces --if-present",
-    "test:scripts": "node --test scripts/desktop-runner.test.mjs scripts/source-launch.integration.test.mjs",
+    "test:scripts": "node --test scripts/desktop-runner.test.mjs scripts/source-launch.integration.test.mjs scripts/live-output.test.mjs",
     "test:integration": "npm run test:integration --workspaces --if-present",
     "e2e": "npm run journeys -w e2e",
     "e2e:live": "npm run journeys:live -w e2e",

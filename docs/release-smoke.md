@@ -52,7 +52,8 @@ build; ABI setup and restoration still run.
 Boots the real desktop app against a scratch home and walks the
 critical path over the app's own socket: seeded config valid →
 Academy seeds and parses → session starts → a minimal `/code` turn
-dispatches → the coder's live output is observed (real agents) →
+dispatches → the coder emits text, thinking or tool activity (initialization
+alone does not count) →
 abort → ended session → clean teardown, with the ABI flipped and
 restored by the driver (release-22).
 Needs a locally signed-in Claude adapter; budget ~5–8 minutes.
