@@ -14,6 +14,8 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-05
+
 ### Added
 
 - Desktop and Playbook 13 CLI share session history, continuation,
@@ -24,8 +26,8 @@ and `npm start` (desktop) or `npm run start:server` (server).
   Drafts and queued messages remain available while recovery is pending.
 - A Git workflow selects complete sessions or individual app files from
   either branch, validates the result, and restores existing project IDs
-  with local path bindings. See the [storage catalog](https://github.com/sublang-ai/spex/blob/main/docs/storage.md)
-  and [Git commands](https://github.com/sublang-ai/spex/blob/main/docs/storage-git.md).
+  with local path bindings. See the [storage catalog](https://github.com/sublang-ai/spex/blob/app-v0.5.0/docs/storage.md)
+  and [Git commands](https://github.com/sublang-ai/spex/blob/app-v0.5.0/docs/storage-git.md).
 
 ### Changed
 
@@ -281,7 +283,8 @@ and `npm start` (desktop) or `npm run start:server` (server).
   Chromium against a real core with substitute agents, including an
   accessibility scan of every surface in both themes.
 
-[Unreleased]: https://github.com/sublang-ai/spex/compare/app-v0.4.0...HEAD
+[Unreleased]: https://github.com/sublang-ai/spex/compare/app-v0.5.0...HEAD
+[0.5.0]: https://github.com/sublang-ai/spex/compare/app-v0.4.0...app-v0.5.0
 [0.4.0]: https://github.com/sublang-ai/spex/compare/app-v0.3.0...app-v0.4.0
 [0.3.0]: https://github.com/sublang-ai/spex/compare/app-v0.2.0...app-v0.3.0
 [0.2.0]: https://github.com/sublang-ai/spex/compare/app-v0.1.0...app-v0.2.0
