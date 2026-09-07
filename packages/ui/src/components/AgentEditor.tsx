@@ -82,9 +82,6 @@ export interface AgentEditorProps {
    * adapter, model, effort, fast mode, and permissions into the draft. */
   captain?: ChipAgent;
   saveLabel?: string;
-  /** A transient acknowledgment beside Save ("Saved ✓"), owned by the
-   * host because a saved config re-seeds this editor (settings-6). */
-  status?: string;
   /** Creation forms save an untouched draft: the seeded block is
    * already a deliberate choice, so there is nothing to dirty. */
   allowUnchanged?: boolean;
@@ -331,15 +328,6 @@ export function AgentEditor(props: AgentEditorProps) {
         >
           {busy ? "Saving…" : (props.saveLabel ?? "Save")}
         </button>
-        {/* Always present so a save's acknowledgment is announced as a
-            change, not as a region appearing (DR-010 §3/§7). */}
-        <span
-          role="status"
-          data-testid="agent-status"
-          className="text-xs text-emerald-700 dark:text-emerald-300"
-        >
-          {props.status ?? ""}
-        </span>
         {props.onCancel ? (
           <button
             type="button"

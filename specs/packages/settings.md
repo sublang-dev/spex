@@ -17,8 +17,9 @@ Integration coverage is exercised through the core service's WebSocket protocol 
 
 #### settings-1
 
-Where the Settings surface is open, the Settings surface shall present the Captain's agent editor over the shared config's top-level `captain` entry, with the fields of an inline agent block: adapter (one of the embedded runtime's known adapters, each carrying its readiness indicator), optional model, optional reasoning effort offered only from the selected adapter's effort vocabulary, a fast-mode switch offered only for an adapter the embedded runtime declares as supporting it ([DR-038](../decisions/038-history-is-done-work.md)), and permissions (mode `auto` or `bypass`, optional writable paths):
+Where the Settings surface is open, the Settings surface shall present the Captain as a row of the session players' shape [[settings-26](#settings-26)] — its agent with that adapter's readiness, and no removal control — whose edit control opens, in place, the Captain's agent editor over the shared config's top-level `captain` entry, with the fields of an inline agent block: adapter (one of the embedded runtime's known adapters, each carrying its readiness indicator), optional model, optional reasoning effort offered only from the selected adapter's effort vocabulary, a fast-mode switch offered only for an adapter the embedded runtime declares as supporting it ([DR-038](../decisions/038-history-is-done-work.md)), and permissions (mode `auto` or `bypass`, optional writable paths):
 
+- The editor offers Save and Cancel, and closes on either — Escape cancels too — handing focus back to the row's edit control ([DR-010](../decisions/010-interface-craft.md) §6); one row's editor stands open at a time across the Captain and the players, a second opening closing the first.
 - When a captain edit is saved, the change appears in the shared config file's `captain` entry as a merge patch that alters only the fields the editor surfaced, preserving hand-written fields such as `instruction` and granular permissions (see [[settings-21](#settings-21)]).
 
 #### settings-2
@@ -37,7 +38,7 @@ While any pending edit in the Settings surface violates a shared-config validati
 
 #### settings-4
 
-Where the Settings surface is open, the Settings surface shall display the captain configuration from the shared config's top-level `captain` entry in the Captain's agent editor [[settings-1](#settings-1)], rendering a hand-written scalar adapter id as that adapter's default agent block with no shorthand label:
+Where the Settings surface is open, the Settings surface shall display the captain configuration from the shared config's top-level `captain` entry on the Captain's row and, once opened, as its agent editor's seeded draft [[settings-1](#settings-1)], rendering a hand-written scalar adapter id as that adapter's default agent block with no shorthand label:
 
 - When a captain edit is saved, the entry appears in the shared config file as an inline agent block, a scalar entry becoming a block on that first save.
 
@@ -72,7 +73,7 @@ Where the Settings surface is open, the Settings surface shall show a per-adapte
 Where the Settings surface is open, the Settings surface shall provide editors for the shared config's `layout` (pane column weights), `notifications`, and `theme` maps:
 
 - When a preference change is saved, the change appears under the corresponding top-level map in the shared config file.
-- A preference control is disabled while its edit is in flight and, once the edit lands, a transient "Saved ✓" status stands beside it — beside Save for an agent editor — so no edit goes unacknowledged ([DR-010](../decisions/010-interface-craft.md) §3).
+- A preference control is disabled while its edit is in flight and, once the edit lands, a transient "Saved ✓" status stands beside it — on the row beside the edit control for an agent editor, which has closed by then [[settings-1](#settings-1)] — so no edit goes unacknowledged ([DR-010](../decisions/010-interface-craft.md) §3).
 - The `theme` editor is labeled as the terminal pane theme for CLI-run sessions only, stands last, and says Spex itself follows the OS theme.
 
 ### Config File Semantics
@@ -225,7 +226,8 @@ Where external edit reflection is exercised, given a connected client holding Se
 
 Where the Settings surface renders against fixture state, the test suite shall assert that each notification row shows its human-readable label with the wire event id in the row's tooltip [[settings-22](#settings-22)], that a not-ready adapter's long fix requirement renders without truncation [[settings-23](#settings-23)], and that with an invalid config the copy control places the config file path on the clipboard and shows a transient copied confirmation [[settings-24](#settings-24)]:
 
-- a saved Captain edit shows the transient Saved status beside Save, and a notification select is disabled while its edit is in flight and ticks once it lands [[settings-6](#settings-6)];
+- the Captain stands as a collapsed row with an edit control and no removal, its editor opening on that control with Save and Cancel, Cancel and Escape closing it without a write and handing focus back to the control, and a player's editor opening closing the Captain's [[settings-1](#settings-1)];
+- a saved Captain edit closes its editor and shows the transient Saved status on the Captain's row, and a notification select is disabled while its edit is in flight and ticks once it lands [[settings-6](#settings-6)];
 - the terminal theme editor stands last under its CLI-only name [[settings-6](#settings-6)];
 - a seeded config names the created file, and a loaded one says nothing [[settings-9](#settings-9)];
 - the permission mode's description follows the selected mode, and the shortcut sheet lists the bindings with the platform's modifier [[settings-10](#settings-10)];
@@ -237,7 +239,7 @@ Where the Settings surface renders against fixture state, the test suite shall a
 
 Where the browser journey harness ([DR-039](../decisions/039-browser-acceptance-journeys.md)) boots the served shell on a demo config carrying a comment, when the journey edits Settings and opens an agent editor through the page, the test suite shall assert:
 
-- the Captain editor shows the config's captain block and saving a changed model writes the file with the comment and key order kept, the surface showing the new value and the Saved status beside Save [[settings-1](#settings-1)] [[settings-4](#settings-4)] [[settings-7](#settings-7)] [[settings-6](#settings-6)];
+- the Captain's row shows the config's captain block, its edit control opens the editor seeded from it, and saving a changed model writes the file with the comment and key order kept, the editor closed, the row showing the new value and the Saved status [[settings-1](#settings-1)] [[settings-4](#settings-4)] [[settings-7](#settings-7)] [[settings-6](#settings-6)];
 - the shortcut sheet lists the palette binding with the platform's modifier [[settings-10](#settings-10)];
 - the surface prints the served shell's version, never "dev" [[settings-31](#settings-31)];
 - an edit the fail-closed rules reject is refused with its message shown and the file left unchanged [[settings-2](#settings-2)];

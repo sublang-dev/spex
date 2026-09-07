@@ -7,11 +7,21 @@
 // DR-019: agents are inline blocks. DR-032 forks the editors: the
 // Captain and the session-player roster are identities and live here,
 // while which player answers a role is a binding and lives with its
-// playbook in the Library. The Agents panel shows per-adapter
-// readiness. Every edit acknowledges in place — disabled while it is
-// in flight, a transient "Saved ✓" once it landed (DR-010 §3).
+// playbook in the Library. The Captain and every player are rows of
+// one shape — a chip, opened by one edit control into the shared
+// editor with Save and Cancel, one row open at a time (settings-1,
+// settings-26). The Agents panel shows per-adapter readiness. Every
+// edit acknowledges in place — disabled while it is in flight, a
+// transient "Saved ✓" on the row once it landed (DR-010 §3).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import {
   PROTOCOL_VERSION,
   type AgentBlockInput,
@@ -79,6 +89,91 @@ function SavedTick({ testId }: { testId: string }) {
       {SAVED}
     </span>
   );
+}
+
+/** Which agent row's editor stands open — the Captain's or one
+ * player's — and how a row hands focus back to its own edit control
+ * when its editor closes (DR-010 §6): one editor at a time, so a
+ * second row opening closes the first. */
+interface RowEditing {
+  editing?: string;
+  open: (key: string) => void;
+  close: (key: string) => void;
+  toggleRef: (key: string) => (element: HTMLButtonElement | null) => void;
+}
+
+function useRowEditing(): RowEditing {
+  const [editing, setEditing] = useState<string>();
+  const toggles = useRef(new Map<string, HTMLButtonElement>());
+  const open = useCallback(
+    (key: string) =>
+      setEditing((current) => (current === key ? undefined : key)),
+    [],
+  );
+  const close = useCallback((key: string) => {
+    setEditing((current) => (current === key ? undefined : current));
+    // The editor's own controls leave with it; the edit control that
+    // opened it is where the keyboard lands next.
+    toggles.current.get(key)?.focus();
+  }, []);
+  const toggleRef = useCallback(
+    (key: string) => (element: HTMLButtonElement | null) => {
+      if (element) toggles.current.set(key, element);
+      else toggles.current.delete(key);
+    },
+    [],
+  );
+  return { editing, open, close, toggleRef };
+}
+
+/** The pencil that opens a row's editor in place (DR-010 §7: a named
+ * 24px target that says whether its editor stands open). */
+function EditToggle({
+  rows,
+  rowKey,
+  label,
+  title,
+  testId,
+}: {
+  rows: RowEditing;
+  rowKey: string;
+  label: string;
+  title: string;
+  testId: string;
+}) {
+  const open = rows.editing === rowKey;
+  return (
+    <button
+      ref={rows.toggleRef(rowKey)}
+      type="button"
+      data-testid={testId}
+      aria-label={label}
+      aria-expanded={open}
+      title={title}
+      onClick={() => rows.open(rowKey)}
+      className={`flex h-6 w-6 items-center justify-center rounded hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200 ${
+        open ? "text-brand-600 dark:text-brand-300" : "text-neutral-500"
+      }`}
+    >
+      <Icon name="edit" />
+    </button>
+  );
+}
+
+/** An open row editor: Escape cancels it the way Cancel does. */
+function RowEditor({
+  onCancel,
+  children,
+}: {
+  onCancel: () => void;
+  children: ReactNode;
+}) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    onCancel();
+  };
+  return <div onKeyDown={onKeyDown}>{children}</div>;
 }
 
 function ReadinessBadge({ entry }: { entry?: ReadinessEntry }) {
@@ -175,12 +270,13 @@ function PlayerRoster({
   players,
   readiness,
   captain,
+  rows,
 }: {
   players: SessionPlayerSummary[];
   readiness: ReadinessEntry[];
   captain: AgentBlockInput;
+  rows: RowEditing;
 }) {
-  const [editing, setEditing] = useState<string>();
   const [adding, setAdding] = useState(false);
   const [newId, setNewId] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string>();
@@ -249,20 +345,13 @@ function PlayerRoster({
               {saved === player.id ? (
                 <SavedTick testId={`player-saved-${player.id}`} />
               ) : null}
-              <button
-                type="button"
-                data-testid={`player-edit-${player.id}`}
-                aria-label={`Edit ${player.id}`}
+              <EditToggle
+                rows={rows}
+                rowKey={player.id}
+                label={`Edit ${player.id}`}
                 title="Edit this player's agent"
-                onClick={() =>
-                  setEditing((current) =>
-                    current === player.id ? undefined : player.id,
-                  )
-                }
-                className="flex h-6 w-6 items-center justify-center rounded text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-200"
-              >
-                <Icon name="edit" />
-              </button>
+                testId={`player-edit-${player.id}`}
+              />
               {confirmDelete === player.id ? (
                 <InlineConfirm
                   question={`Remove ${player.id}?`}
@@ -293,21 +382,23 @@ function PlayerRoster({
               {error.message}
             </p>
           ) : null}
-          {editing === player.id ? (
-            <AgentEditor
-              key={JSON.stringify(player.agent)}
-              initial={player.agent}
-              readiness={readiness}
-              captain={captain}
-              onSave={(patch) =>
-                patchPlayer(player.id, patch).then((result) => {
-                  setEditing(undefined);
-                  setSaved(player.id);
-                  return result;
-                })
-              }
-              onCancel={() => setEditing(undefined)}
-            />
+          {rows.editing === player.id ? (
+            <RowEditor onCancel={() => rows.close(player.id)}>
+              <AgentEditor
+                key={JSON.stringify(player.agent)}
+                initial={player.agent}
+                readiness={readiness}
+                captain={captain}
+                onSave={(patch) =>
+                  patchPlayer(player.id, patch).then((result) => {
+                    rows.close(player.id);
+                    setSaved(player.id);
+                    return result;
+                  })
+                }
+                onCancel={() => rows.close(player.id)}
+              />
+            </RowEditor>
           ) : null}
         </div>
       ))}
@@ -407,6 +498,8 @@ export function SettingsSurface() {
   // Which preference edit is in flight, and which one just landed.
   const [pending, setPending] = useState<string>();
   const [saved, setSaved] = useTransient(1500);
+  // The one open agent-row editor, the Captain's or a player's.
+  const rows = useRowEditing();
 
   if (!configState) {
     return (
@@ -536,34 +629,60 @@ export function SettingsSurface() {
 
       <section data-testid="captain-section" className="flex flex-col gap-2">
         <h2 className="text-sm font-semibold text-neutral-500">Captain</h2>
-        <div className="flex items-center gap-2 text-sm">
-          <AgentChip
-            agent={summary.captain}
-            readiness={readinessByAdapter.get(summary.captain.adapter)}
-            label="Captain"
-          />
-          <span className="text-xs text-neutral-500">
-            The agent that reads your messages and picks the playbook to run.
-          </span>
+        {/* The Captain is a row of the players' shape (settings-1): its
+            chip, opened by the pencil into the shared editor, which
+            closes on Save or Cancel — no removal, since a session has
+            exactly one Captain. */}
+        <div
+          data-testid="captain-row"
+          className="flex flex-col gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm dark:border-neutral-800 dark:bg-neutral-900"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-mono font-medium">captain</span>
+            <AgentChip
+              agent={summary.captain}
+              readiness={readinessByAdapter.get(summary.captain.adapter)}
+              label="Captain"
+            />
+            <span className="text-xs text-neutral-500">
+              Reads your messages and picks the playbook to run.
+            </span>
+            <span className="ml-auto flex items-center gap-1">
+              {saved === "captain" ? <SavedTick testId="captain-saved" /> : null}
+              <EditToggle
+                rows={rows}
+                rowKey="captain"
+                label="Edit the Captain"
+                title="Edit the Captain's agent"
+                testId="captain-edit"
+              />
+            </span>
+          </div>
+          {rows.editing === "captain" ? (
+            <RowEditor onCancel={() => rows.close("captain")}>
+              <AgentEditor
+                key={JSON.stringify(summary.captain)}
+                initial={summary.captain}
+                readiness={readiness}
+                onSave={(patch) =>
+                  setCaptain(patch).then((result) => {
+                    rows.close("captain");
+                    setSaved("captain");
+                    return result;
+                  })
+                }
+                onCancel={() => rows.close("captain")}
+              />
+            </RowEditor>
+          ) : null}
         </div>
-        <AgentEditor
-          key={JSON.stringify(summary.captain)}
-          initial={summary.captain}
-          readiness={readiness}
-          status={saved === "captain" ? SAVED : undefined}
-          onSave={(patch) =>
-            setCaptain(patch).then((result) => {
-              setSaved("captain");
-              return result;
-            })
-          }
-        />
       </section>
 
       <PlayerRoster
         players={summary.players}
         readiness={readiness}
         captain={summary.captain}
+        rows={rows}
       />
 
       <section data-testid="agents-section" className="flex flex-col gap-2">

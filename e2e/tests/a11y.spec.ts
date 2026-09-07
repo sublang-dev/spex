@@ -58,6 +58,10 @@ for (const theme of ["light", "dark"] as const) {
 
     await nav(page, "Settings").click();
     await expect(page.getByTestId("captain-section")).toBeVisible();
+    // The Captain's editor opens in place; scan the surface with it
+    // standing, so the shared editor's controls are covered too.
+    await page.getByTestId("captain-edit").click();
+    await expect(page.getByTestId("agent-editor")).toBeVisible();
     found.push(...(await scan(page, "Settings")));
 
     expect(found, found.join("\n")).toEqual([]);

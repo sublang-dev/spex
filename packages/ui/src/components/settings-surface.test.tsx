@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 SubLang International <https://sublang.ai>
 
-// SET coverage for the DR-019 surfaces: the Captain's inline agent
-// editor writing merge patches, and the per-adapter readiness panel
-// naming the positions each adapter serves.
+// SET coverage for the DR-019 surfaces: the Captain's row opening the
+// shared agent editor and writing merge patches, and the per-adapter
+// readiness panel naming the positions each adapter serves.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -92,18 +92,30 @@ beforeEach(() => {
   commandMock.mockResolvedValue(CONFIG);
 });
 
-describe("SET: the Captain's inline agent", () => {
-  test("the captain renders as a chip over its own block", () => {
+describe("SET: the Captain's row and its agent editor", () => {
+  test("the captain renders as a chip on a collapsed row with no removal", () => {
     renderSettings();
     const section = screen.getByTestId("captain-section");
     expect(section.textContent).toContain("claude");
     expect(section.textContent).toContain("claude-opus-4-8");
     expect(section.textContent).toContain("high");
+    // The row wears the players' shape (settings-1): an edit toggle,
+    // no editor until it is asked for, and never a remove control.
+    expect(within(section).queryByTestId("agent-editor")).toBeNull();
+    const toggle = within(section).getByTestId("captain-edit");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      within(section).queryByRole("button", { name: /^Remove/ }),
+    ).toBeNull();
   });
 
-  test("editing the model writes a captain.set merge patch", async () => {
+  test("editing the model writes a captain.set merge patch and closes the editor", async () => {
     renderSettings();
     const section = screen.getByTestId("captain-section");
+    fireEvent.click(within(section).getByTestId("captain-edit"));
+    expect(
+      within(section).getByTestId("captain-edit").getAttribute("aria-expanded"),
+    ).toBe("true");
     fireEvent.change(within(section).getByTestId("agent-model"), {
       target: { value: "claude-opus-4-8[1m]" },
     });
@@ -115,6 +127,64 @@ describe("SET: the Captain's inline agent", () => {
     expect(payload.op.patch.model).toBe("claude-opus-4-8[1m]");
     // A merge patch never carries hand-written fields it did not edit.
     expect(payload.op.patch).not.toHaveProperty("instruction");
+    // Saved, the editor folds back into the row and the toggle takes
+    // the keyboard (DR-010 §6).
+    await vi.waitFor(() =>
+      expect(within(section).queryByTestId("agent-editor")).toBeNull(),
+    );
+    expect(document.activeElement).toBe(
+      within(section).getByTestId("captain-edit"),
+    );
+  });
+
+  test("Cancel and Escape close the Captain's editor without a command", () => {
+    renderSettings();
+    const section = screen.getByTestId("captain-section");
+    fireEvent.click(within(section).getByTestId("captain-edit"));
+    fireEvent.change(within(section).getByTestId("agent-model"), {
+      target: { value: "claude-sonnet-5" },
+    });
+    fireEvent.click(within(section).getByTestId("agent-cancel"));
+    expect(within(section).queryByTestId("agent-editor")).toBeNull();
+    expect(commandMock).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(
+      within(section).getByTestId("captain-edit"),
+    );
+    // Reopened, the draft starts from the file again.
+    fireEvent.click(within(section).getByTestId("captain-edit"));
+    expect(
+      (within(section).getByTestId("agent-model") as HTMLInputElement).value,
+    ).toBe("claude-opus-4-8");
+    fireEvent.keyDown(within(section).getByTestId("agent-model"), {
+      key: "Escape",
+    });
+    expect(within(section).queryByTestId("agent-editor")).toBeNull();
+    expect(commandMock).not.toHaveBeenCalled();
+  });
+
+  test("one row's editor stands open at a time, the Captain's and the players' alike", () => {
+    renderSettings();
+    fireEvent.click(screen.getByTestId("captain-edit"));
+    expect(screen.getAllByTestId("agent-editor")).toHaveLength(1);
+    fireEvent.click(screen.getByTestId("player-edit-dev.coder"));
+    expect(screen.getAllByTestId("agent-editor")).toHaveLength(1);
+    expect(
+      within(screen.getByTestId("player-row-dev.coder")).getByTestId(
+        "agent-editor",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("captain-edit").getAttribute("aria-expanded"),
+    ).toBe("false");
+    fireEvent.click(screen.getByTestId("captain-edit"));
+    expect(
+      within(screen.getByTestId("captain-section")).getByTestId("agent-editor"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("player-row-dev.coder")).queryByTestId(
+        "agent-editor",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -225,17 +295,22 @@ describe("SET: the session-player roster", () => {
 });
 
 describe("settings-6: every edit acknowledges in place", () => {
-  test("saving the Captain shows a transient Saved tick beside Save", async () => {
+  test("saving the Captain closes its editor and ticks on the row", async () => {
     renderSettings();
     const section = screen.getByTestId("captain-section");
-    expect(within(section).getByTestId("agent-status").textContent).toBe("");
+    expect(within(section).queryByRole("status")).toBeNull();
+    fireEvent.click(within(section).getByTestId("captain-edit"));
     fireEvent.change(within(section).getByTestId("agent-model"), {
       target: { value: "claude-opus-5" },
     });
     fireEvent.click(within(section).getByTestId("agent-save"));
     await vi.waitFor(() =>
-      expect(within(section).getByRole("status").textContent).toBe("Saved ✓"),
+      expect(within(section).getByTestId("captain-saved").textContent).toBe(
+        "Saved ✓",
+      ),
     );
+    expect(within(section).getByRole("status").textContent).toBe("Saved ✓");
+    expect(within(section).queryByTestId("agent-editor")).toBeNull();
   });
 
   test("a notification select is disabled in flight, then ticks", async () => {
@@ -303,6 +378,7 @@ describe("settings-10: the shortcut sheet and the mode guidance", () => {
   test("the permission mode explains its stakes", () => {
     renderSettings();
     const section = screen.getByTestId("captain-section");
+    fireEvent.click(within(section).getByTestId("captain-edit"));
     expect(within(section).getByTestId("agent-mode-help").textContent).toMatch(
       /^auto:/,
     );
@@ -353,6 +429,7 @@ describe("settings-1, DR-038: fast mode is visible and switchable", () => {
     const chip = within(section).getByTestId("agent-chip");
     expect(within(chip).getByTitle("fast mode").textContent).toBe("⚡");
     expect(chip.getAttribute("aria-label")).toContain("fast mode");
+    fireEvent.click(within(section).getByTestId("captain-edit"));
     expect(
       (within(section).getByTestId("agent-fast-mode") as HTMLInputElement)
         .checked,

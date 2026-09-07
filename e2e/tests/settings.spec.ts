@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2026 SubLang International <https://sublang.ai>
 
-// Settings as a user edits them (settings-29): the Captain editor
+// Settings as a user edits them (settings-29): the Captain row's editor
 // writing the shared config with its comment kept, a refused edit,
 // readiness per adapter, and an outside edit reflected live.
 
@@ -11,25 +11,31 @@ import { test, expect, open, nav } from "../src/harness";
 
 test.use({ appOptions: { project: true } });
 
-test("settings-29: the Captain editor round-trips the shared config", async ({
+test("settings-29: the Captain row's editor round-trips the shared config", async ({
   page,
   app,
 }) => {
   await open(page, app);
   await nav(page, "Settings").click();
 
-  // The captain block as configured.
+  // The captain block as configured: a collapsed row, its chip naming
+  // the model, the editor opening on the pencil (settings-1).
   const captain = page.getByTestId("captain-section");
   await expect(captain).toBeVisible();
+  const chip = captain.getByTestId("agent-chip");
+  await expect(chip).toContainText("claude-opus-5");
+  await expect(captain.getByTestId("agent-editor")).toHaveCount(0);
+  await captain.getByTestId("captain-edit").click();
   const model = captain.getByTestId("agent-model");
   await expect(model).toHaveValue("claude-opus-5");
 
-  // Change the model; the save says so beside Save, and the file
-  // keeps its comment and key order.
+  // Change the model; the editor closes, the row ticks Saved and
+  // shows the new value, and the file keeps its comment and key order.
   await model.fill("claude-sonnet-5");
   await captain.getByTestId("agent-save").click();
-  await expect(captain.getByRole("status")).toHaveText("Saved ✓");
-  await expect(captain.getByTestId("agent-model")).toHaveValue("claude-sonnet-5");
+  await expect(captain.getByTestId("captain-saved")).toHaveText("Saved ✓");
+  await expect(captain.getByTestId("agent-editor")).toHaveCount(0);
+  await expect(chip).toContainText("claude-sonnet-5");
   await expect.poll(() => app.readConfig()).toContain("claude-sonnet-5");
   const written = app.readConfig();
   expect(written.startsWith("# Spex demo config")).toBe(true);
@@ -65,5 +71,5 @@ test("settings-29: the Captain editor round-trips the shared config", async ({
 
   // An outside edit lands on the surface without a reload.
   writeFileSync(app.configPath, before.replace("claude-sonnet-5", "claude-opus-5"));
-  await expect(captain.getByTestId("agent-model")).toHaveValue("claude-opus-5");
+  await expect(chip).toContainText("claude-opus-5");
 });
