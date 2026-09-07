@@ -8,6 +8,7 @@
 Accepted (2026-09-02) on the owner's review of the Dashboard and Workspace; session deletion is extended to sessions another host wrote by [DR-042](042-sessions-continue.md).
 Amended (2026-09-02): the History band caps at eight rows and scrolls inside that frame, its "Older…" control at the frame's end, so a long history is browsed in place and the groups below never move.
 Amended (2026-09-02): the Dashboard carries a Running band between the attention queue and the project groups, listing every live session whose turn is in flight and whose session no attention entry summons — the queue answers "what needs me", the band answers "what is working".
+Amended by [DR-051](051-runtime-held-for-a-turn.md): a session's delete control waits only on a turn in flight, since the runtime is held for a turn and nothing is ended.
 Amends [DR-035](035-intent-ledger.md) (a never-worked intent leaves the ledger without a trace; history lists done work, records included), [DR-011](011-project-workspace.md) (the Repo tab becomes the project's Overview), and [DR-029](029-session-history-home.md) (session deletion is decided); playbook 12.1 and 12.2's published host-capabilities facade was tried against the Captain shell and refused — its repository object lacks `acquire` and `runCohort`, and its per-playbook ledgers diverge where the shell requires one — so [DR-037](037-playbook-12-adoption.md)'s by-path builder stands.
 
 ## Context

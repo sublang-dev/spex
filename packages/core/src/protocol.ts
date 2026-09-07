@@ -161,11 +161,13 @@ export interface SessionInfo {
   projectId: string;
   projectPath: string;
   createdAt: number;
+  /** The runtime is held: a turn is in flight or settling (DR-051). */
   live: boolean;
   /** Includes checkpoint settlement after the runtime finishes. */
   turnActive?: boolean;
   /** Another CLI/host owns this session, or its ownership is unprovable. */
   externalWriter?: "active" | "unknown";
+  /** Last activity — the checkpoint's last settlement — null while live. */
   endedAt: number | null;
   /** The session's bound player roster, in config order (DR-032). */
   players: { id: string; adapter: AdapterName; model?: string; fastMode?: boolean }[];

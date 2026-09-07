@@ -61,7 +61,8 @@ test("run-view-104 @live: a real /code task shows live output and aborts cleanly
   await expect(page.getByTestId("boss-composer")).toBeEnabled({ timeout: 90_000 });
   await attach("after abort");
 
-  await page.getByTestId("end-session").click();
-  await page.getByRole("button", { name: "End", exact: true }).click();
-  await expect(page.getByTestId("ended-notice")).toBeVisible();
+  // Nothing ends (DR-051): the session reads idle with its composer
+  // ready for the next message.
+  await expect(page.getByTestId("end-session")).toHaveCount(0);
+  await expect(page.getByTestId("history-notice")).toHaveCount(0);
 });

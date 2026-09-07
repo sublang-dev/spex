@@ -784,6 +784,32 @@ describe("dashboard-26/29: groups and the queue band", () => {
     }
   });
 
+  test("a pointer Remove leaves the pointer where it is, and the line lapses on schedule", async () => {
+    vi.useFakeTimers();
+    try {
+      const current = ledgerMock(QUEUE_LEDGER);
+      seed({ ledger: current() });
+      renderSurface();
+      fireEvent.click(screen.getByTestId("upnext-menu-q3"));
+      // A mouse click carries its click count (detail 1); the keyboard
+      // sends none, which is the case the test above covers.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("upnext-remove-action-q3"), {
+          detail: 1,
+        });
+      });
+      const notice = screen.getByTestId("upnext-removed-p1");
+      const undo = within(notice).getByRole("button", { name: "Undo" });
+      expect(document.activeElement).not.toBe(undo);
+      act(() => {
+        vi.advanceTimersByTime(6_000);
+      });
+      expect(screen.queryByTestId("upnext-removed-p1")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("the provenance action is named after what it opens (dashboard-29, DR-038)", () => {
     const sourced = (
       id: string,
@@ -978,7 +1004,7 @@ describe("dashboard-28: the Now band reads the live lane", () => {
 
     // A project with no live session stays quiet (dashboard-8).
     expect(screen.getByTestId("now-p2").textContent).toContain(
-      "Idle — no live session.",
+      "Idle — no conversation yet.",
     );
     expect(screen.queryByTestId("now-drop-p2")).toBeNull();
   });
@@ -2089,7 +2115,7 @@ describe("dashboard-8/21/22/32: empty states, no takeover, the filter", () => {
       "Nothing done here yet.",
     );
     expect(screen.getByTestId("now-p1").textContent).toContain(
-      "Idle — no live session.",
+      "Idle — no conversation yet.",
     );
     // The add row stays as the capture path (dashboard-8/29).
     expect(screen.getByTestId("add-intent-p1")).toBeTruthy();

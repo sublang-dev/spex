@@ -46,6 +46,8 @@ function session(over: Partial<SessionInfo> & { id: string }): SessionInfo {
     createdAt: NOW - 60_000,
     live: false,
     endedAt: NOW - 30_000,
+    // Idle by default (DR-051): a message continues it.
+    continuable: true,
     players: PLAYERS,
     initialVisible: ["dev.coder"],
     turns: 1,
@@ -100,6 +102,9 @@ const SESSIONS: SessionInfo[] = [
     projectId: "p2",
     projectPath: "/tmp/beta",
     title: "beta wrapped up",
+    // History the core cannot continue: read-only.
+    continuable: false,
+    continuationReason: "session replay is incomplete",
   }),
 ];
 
@@ -232,10 +237,11 @@ describe("run-view-70: the sidebar navigates, the tabs hold what is open", () =>
     expect(liveRow.getAttribute("aria-label")).toContain("2m ago");
     expect(liveRow.getAttribute("aria-label")).toContain("2 turns");
 
-    // A failure the session ended holding is history, not a summons.
+    // A failure the session's last turn held that no longer summons is
+    // history, not a summons (run-view-73).
     expect(
       screen.getByTestId("sidebar-mark-a-failed").dataset.life,
-    ).toBe("ended-failed");
+    ).toBe("idle-failed");
     expect(
       screen.getByTestId("sidebar-session-a-failed").getAttribute("aria-label"),
     ).toContain("held a failure");
@@ -308,9 +314,10 @@ describe("run-view-70: the sidebar navigates, the tabs hold what is open", () =>
     });
     expect(useAppStore.getState().currentProjectId).toBe("p2");
     expect(useAppStore.getState().openTabs.p2).toEqual(["b-ended"]);
-    // Ended means read-only: the composer gives way to the notice.
-    expect(screen.getByTestId("ended-notice")).toBeTruthy();
-    expect(screen.queryByTestId("end-session")).toBeNull();
+    // History the core cannot continue is read-only: the composer
+    // gives way to the notice (run-view-33).
+    expect(screen.getByTestId("history-notice")).toBeTruthy();
+    expect(screen.queryByTestId("boss-composer")).toBeNull();
 
     await act(async () => {
       fireEvent.click(screen.getByTestId("sidebar-session-b-ended"));
@@ -318,26 +325,24 @@ describe("run-view-70: the sidebar navigates, the tabs hold what is open", () =>
     expect(useAppStore.getState().openTabs.p2).toEqual(["b-ended"]);
   });
 
-  test("ending keeps the transcript put and marks the row ended", async () => {
+  test("a turn settling keeps the transcript put and reads idle, never ended", async () => {
     render(<App />);
-    expect(screen.getByTestId("end-session")).toBeTruthy();
+    // The boot's ledger read lands first, so the fold below is not
+    // overwritten by it.
+    await act(async () => {});
+    // There is no ending control (DR-051).
+    expect(screen.queryByTestId("end-session")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("end-session"));
-    await act(async () => {
-      fireEvent.click(screen.getByText("End"));
-    });
-    expect(commandMock).toHaveBeenCalledWith("session.dispose", {
-      sessionId: "a-live",
-    });
-
-    // The core answers with the ended state; the tab must not move.
-    // Ending also clears the session's attention from the ledger fold
-    // (intents.changed re-pulls it in production).
+    // The core reports the runtime released at settlement: the tab
+    // must not move, nothing says ended, and the composer stands
+    // ready for the next message (run-view-69). The answered question
+    // leaves the ledger fold (intents.changed re-pulls it in
+    // production).
     await act(async () => {
       useAppStore.setState({
         sessions: SESSIONS.map((entry) =>
           entry.id === "a-live"
-            ? { ...entry, live: false, endedAt: NOW }
+            ? { ...entry, live: false, endedAt: NOW, continuable: true }
             : entry,
         ),
         ledger: {
@@ -350,11 +355,18 @@ describe("run-view-70: the sidebar navigates, the tabs hold what is open", () =>
       });
     });
     expect(useAppStore.getState().openTabs.p1).toEqual(["a-live"]);
-    expect(screen.getByTestId("ended-notice")).toBeTruthy();
-    expect(screen.getByTestId("tab-ended-a-live")).toBeTruthy();
+    expect(screen.queryByTestId("history-notice")).toBeNull();
+    expect(screen.queryByTestId("session-last-active")).toBeNull();
+    expect(screen.getByTestId("boss-composer")).toBeTruthy();
+    expect(screen.queryByTestId("tab-history-a-live")).toBeNull();
+    const tab = screen.getByRole("tab", { name: /^harden the session refresh/ });
+    expect(tab.getAttribute("aria-label")).not.toMatch(/ended|history/);
     expect(screen.getByTestId("sidebar-mark-a-live").dataset.life).toBe(
-      "ended",
+      "idle",
     );
+    expect(
+      screen.getByTestId("sidebar-session-a-live").getAttribute("aria-label"),
+    ).toContain("idle");
   });
 
   test("the tree walks by keyboard and keeps its own letters", async () => {
@@ -622,12 +634,10 @@ describe("run-view-58, projects-4: the Overview tab pins the project's group", (
 });
 
 describe("DR-038, core-service-70: sessions can be deleted from the sidebar", () => {
-  test.each(["active", "unknown"] as const)("external %s ownership removes open End/Delete confirmations and keeps the transcript", (externalWriter) => {
+  test.each(["active", "unknown"] as const)("external %s ownership removes an open Delete confirmation and keeps the transcript", (externalWriter) => {
     const composer = {draft: "Keep draft", queued: [{text: "Keep queue"}]};
     useAppStore.setState({composers: {"a-live": composer}});
     render(<App />);
-    fireEvent.click(screen.getByRole("button", {name: "End session"}));
-    expect(screen.getByRole("button", {name: "End"})).toBeTruthy();
     fireEvent.click(screen.getByTestId("sidebar-delete-a-failed"));
     expect(screen.getByTestId("sidebar-delete-confirm-a-failed")).toBeTruthy();
     act(() => {
@@ -639,9 +649,7 @@ describe("DR-038, core-service-70: sessions can be deleted from the sidebar", ()
     expect(screen.getByTestId("session-external-owner")).toBeTruthy();
     expect(screen.getByTestId("captain-pane")).toBeTruthy();
     expect(screen.queryByTestId("boss-composer")).toBeNull();
-    expect(screen.queryByTestId("tab-ended-a-live")).toBeNull();
-    expect(screen.queryByRole("button", {name: "End"})).toBeNull();
-    expect(screen.queryByRole("button", {name: "End session"})).toBeNull();
+    expect(screen.queryByTestId("tab-history-a-live")).toBeNull();
     expect(screen.queryByTestId("sidebar-delete-confirm-a-failed")).toBeNull();
     expect(screen.queryByTestId("sidebar-delete-a-failed")).toBeNull();
     expect(screen.queryByTestId("sidebar-delete-a-live")).toBeNull();
@@ -652,9 +660,9 @@ describe("DR-038, core-service-70: sessions can be deleted from the sidebar", ()
     expect(commandMock).not.toHaveBeenCalledWith("session.delete", expect.anything());
   });
 
-  test("an ended session offers delete; the confirm sends session.delete and every trace goes", async () => {
+  test("an idle session offers delete; the confirm sends session.delete and every trace goes", async () => {
     render(<App />);
-    // A live session carries no delete control; an ended one does.
+    // A working session carries no delete control; an idle one does.
     expect(screen.queryByTestId("sidebar-delete-a-live")).toBeNull();
     const control = screen.getByTestId("sidebar-delete-a-failed");
     expect(control.getAttribute("aria-label")).toBe(
@@ -675,7 +683,7 @@ describe("DR-038, core-service-70: sessions can be deleted from the sidebar", ()
       expect.anything(),
     );
 
-    // Open the ended session as a tab, so the removal has one to close.
+    // Open the idle session as a tab, so the removal has one to close.
     commandMock.mockImplementation(async (type: string) =>
       type === "ledger.get"
         ? (LEDGER as object)
@@ -781,7 +789,7 @@ describe("run-view-48/50: the strip walks by keyboard and names its attention", 
       name: "harden the session refresh — needs your reply",
     });
     const failed = screen.getByRole("tab", {
-      name: "chase the flaky test — ended",
+      name: "chase the flaky test",
     });
     const plus = screen.getByRole("tab", { name: "Start another session" });
     const specs = screen.getByTestId("workspace-tab-specs");
@@ -814,22 +822,14 @@ describe("run-view-48/50: the strip walks by keyboard and names its attention", 
     expect(plus.title).toBe(`Start another session (${keyLabel("N")})`);
   });
 
-  test("closing tabs and ending a session leave focus on a tab", async () => {
+  test("closing tabs leaves focus on a tab", async () => {
     render(<App />);
     const failed = screen.getByRole("tab", {
-      name: "chase the flaky test — ended",
+      name: "chase the flaky test",
     });
     failed.focus();
     fireEvent.keyDown(failed, { key: "Delete" });
     expect(useAppStore.getState().openTabs.p1).toEqual(["a-live"]);
-    expect(document.activeElement).toBe(
-      screen.getByRole("tab", { name: /harden the session refresh/ }),
-    );
-
-    fireEvent.click(screen.getByTestId("end-session"));
-    await act(async () => {
-      fireEvent.click(screen.getByText("End"));
-    });
     const live = screen.getByRole("tab", { name: /harden the session refresh/ });
     expect(document.activeElement).toBe(live);
 

@@ -8,6 +8,7 @@
 Accepted (2026-09-02) on the owner's question why an ended session cannot take a new message, and why a session run from the terminal cannot be deleted.
 Amends [DR-036](036-file-state-store.md) (the resume experience it deferred; deletion as the one write that crosses hosts), [DR-038](038-history-is-done-work.md) (a session another host wrote is deletable), and [DR-029](029-session-history-home.md) (an ended session is a paused conversation, not a closed one).
 Amended by [DR-045](045-unified-session-storage.md): shared recovery, cross-interface continuation, local provider hints and deletion.
+Amended by [DR-051](051-runtime-held-for-a-turn.md): ending retires — the runtime is held only for a turn, so a session is continued, never ended, and one working turn per project replaces the one-live-session rule.
 
 ## Context
 

@@ -298,7 +298,7 @@ async function main(): Promise<void> {
         defaultId: 0,
         cancelId: 0,
         message: "A playbook turn is still running.",
-        detail: "Quitting aborts active turns and disposes sessions.",
+        detail: "Quitting aborts the running turn; a message continues the conversation later.",
       });
       if (choice === 0) {
         event.preventDefault();

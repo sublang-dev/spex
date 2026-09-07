@@ -122,8 +122,6 @@ export function RunView({
   error,
   playbooks,
   readOnly,
-  ending,
-  onEnd,
   onStartNew,
   onCompileNew,
   onRetryLoad,
@@ -146,13 +144,8 @@ export function RunView({
   /** Set while the Captain's adapter reports not ready: a live
    * session's failure lines then link to Settings (run-view-2). */
   readinessHint?: ReadinessHint;
-  /** Ended-session transcript browsing (RUN-33): input replaced. */
+  /** History the core cannot continue (run-view-33): input replaced. */
   readOnly?: boolean;
-  /** The end request is in flight — the agents are shutting down. */
-  ending?: boolean;
-  /** End this session. Guarded here, never on the tab's close
-   * control, which stops nothing (run-view-47). */
-  onEnd?: () => void;
   onStartNew?: () => void;
   onCompileNew?: () => void;
   /** Retry a failed transcript load (read-only view). */
@@ -195,16 +188,6 @@ export function RunView({
   const setLaneCollapsed = useAppStore((state) => state.setLaneCollapsed);
   const splitRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
-  const [confirmEnd, setConfirmEnd] = useState(false);
-  // Backing out of the end confirm returns focus to the control that
-  // opened it, never to <body> (run-view-50).
-  const endButtonRef = useRef<HTMLButtonElement>(null);
-  const [refocusEnd, setRefocusEnd] = useState(false);
-  useEffect(() => {
-    if (!refocusEnd || confirmEnd) return;
-    endButtonRef.current?.focus();
-    setRefocusEnd(false);
-  }, [refocusEnd, confirmEnd]);
 
   // The intents this session's turns are bound to (DR-035): the open
   // fold serves them; a closed one survives below as a snapshot so its
@@ -320,7 +303,7 @@ export function RunView({
           <DeliveryCard
             derived={entry}
             closed={!stillOpen}
-            live={session.live && !externalWriter}
+            live={!readOnly}
             next={nextUp}
             onClose={(as) => closeIntent(entry.intent.id, as)}
             onStartNext={(intent) => void stageDispatch(intent)}
@@ -406,18 +389,16 @@ export function RunView({
   const soloCaptain = lanes.length === 0;
   const metaById = new Map(session.players.map((player) => [player.id, player]));
   const title = session.title ?? "new session";
-  const queued = composer.queued.length;
-  // Ended is the session's own state; read-only is the host's verdict
-  // on it — a continuable session is ended yet keeps its composer
-  // (run-view-33, DR-042).
-  const ended = !externalWriter && (readOnly || !session.live);
   const uncertain = !externalWriter && !!session.recovery && !session.turnActive;
+  // The runtime is held only for a turn (DR-051): whether it is held
+  // is not the reader's business, so nothing here says "ended". Only
+  // history the core cannot continue is named, with when it last spoke.
+  const history = !externalWriter && readOnly && !uncertain;
   const loadError = view.loadError ?? (readOnly && !uncertain ? error : undefined);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* The conversation names itself, and ending it is a control of
-          its own (run-view-69, run-view-47). */}
+      {/* The conversation names itself (run-view-69). */}
       <div className="flex items-center gap-2 border-b border-neutral-200 px-4 py-1.5 text-sm dark:border-neutral-800">
         <span className="min-w-0 truncate font-medium" title={title}>
           {title}
@@ -432,47 +413,14 @@ export function RunView({
               ? "Session is in use elsewhere"
               : "Session ownership is unknown · controls are unavailable"}
           </span>
-        ) : ended ? (
+        ) : history ? (
           <span
-            data-testid="session-ended-at"
+            data-testid="session-last-active"
             className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
           >
-            Ended{" "}
+            Last active{" "}
             {session.endedAt ? new Date(session.endedAt).toLocaleString() : ""}
           </span>
-        ) : confirmEnd ? (
-          <span className="ml-auto">
-            <InlineConfirm
-              question={
-                "End this session? A message can continue it later." +
-                (queued > 0
-                  ? ` ${queued} queued message${queued === 1 ? "" : "s"} will be discarded.`
-                  : "")
-              }
-              confirmLabel="End"
-              cancelLabel="Keep"
-              onConfirm={() => {
-                setConfirmEnd(false);
-                onEnd?.();
-              }}
-              onCancel={() => {
-                setConfirmEnd(false);
-                setRefocusEnd(true);
-              }}
-            />
-          </span>
-        ) : onEnd ? (
-          <button
-            type="button"
-            ref={endButtonRef}
-            data-testid="end-session"
-            disabled={ending}
-            onClick={() => setConfirmEnd(true)}
-            title="Stop this session's agents"
-            className="ml-auto shrink-0 rounded-md border border-neutral-300 px-2 py-0.5 text-xs text-neutral-600 hover:border-red-300 hover:text-red-600 disabled:animate-pulse dark:border-neutral-700 dark:text-neutral-300 dark:hover:border-red-800 dark:hover:text-red-400"
-          >
-            {ending ? "Ending…" : "End session"}
-          </button>
         ) : null}
       </div>
       {/* The split is layout by its own width (run-view-107): panes
@@ -541,19 +489,17 @@ export function RunView({
               ) : null}
             </div>
           ) : null}
-          {ended && !uncertain ? (
+          {history ? (
             <>
-              {/* The ended notice (run-view-33): a paused conversation
-                  when a message can continue it, read-only otherwise;
-                  its control wraps under the words in a narrow pane. */}
+              {/* The history notice (run-view-33): the core's reason it
+                  cannot continue, and the way on; its control wraps
+                  under the words in a narrow pane. */}
               <div
-                data-testid="ended-notice"
+                data-testid="history-notice"
                 className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm text-neutral-500 dark:border-neutral-800 dark:bg-neutral-900"
               >
                 <span className="min-w-0 flex-1 basis-40">
-                  {readOnly
-                    ? (session.continuationReason ?? "Ended — this session can't be continued")
-                    : "Ended · a message continues it"}
+                  {session.continuationReason ?? "History — this session can't be continued"}
                 </span>
                 {onStartNew ? (
                   <button

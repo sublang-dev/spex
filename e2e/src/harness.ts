@@ -257,7 +257,7 @@ export async function startApp(options: AppOptions = {}): Promise<App> {
             ? fakeAdapterImports({ fallback: { result: JSON.stringify({ action: "respond", text: "Acknowledged by the real Captain." }) } }).imports
             : demoAdapterImports({ delayMs: options.agentDelayMs ?? 400 }).imports,
           adapterRuntime: () => ({ usable: true }),
-          ...(options.realCaptain ? {} : { captainFactory: async () => demoCaptain() }),
+          ...(options.realCaptain ? {} : { captainFactory: async (_composed: unknown, sessionId: string) => demoCaptain(sessionId) }),
           env,
           home,
           ...(options.forge

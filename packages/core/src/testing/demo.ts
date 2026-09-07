@@ -200,22 +200,35 @@ export function demoAdapterImports(options: { delayMs?: number } = {}) {
  * session on a player question; anything else narrates a full /code
  * run with a nested /review, mirroring the runtime's trace shapes
  * (DR-028, DR-031) so the UI draws the cards a real run produces. */
-export function demoCaptain(): Captain {
+/** Which demo sessions stand parked on a question, by session id: the
+ * runtime is held only for a turn (DR-051), so a fresh fixture takes
+ * the reply turn and must still know the park it is leaving. */
+const parkedSessions = new Set<string>();
+
+export function demoCaptain(sessionId?: string): Captain {
   // The runtime leaves a park with one transition on the Boss reply
   // (BOSS_REPLY from awaitBossReply); the narration mirrors it so the
   // folds that answer a question on that departure see what a real
   // run emits (run-view-9).
-  let parked = false;
+  let parkedHere = false;
+  const isParked = () => (sessionId ? parkedSessions.has(sessionId) : parkedHere);
+  const setParked = (value: boolean) => {
+    parkedHere = value;
+    if (sessionId) {
+      if (value) parkedSessions.add(sessionId);
+      else parkedSessions.delete(sessionId);
+    }
+  };
   return createScriptedCaptain(async (turn, context, session) => {
-    if (parked && !turn.prompt.toLowerCase().startsWith("ask")) {
-      parked = false;
+    if (isParked() && !turn.prompt.toLowerCase().startsWith("ask")) {
+      setParked(false);
       await session.emitTelemetry({
         topic: "playbook.fsm.state",
         payload: { from: "awaitBossReply", to: "coding", event: "BOSS_REPLY" },
       });
     }
     if (turn.prompt.toLowerCase().startsWith("ask")) {
-      parked = true;
+      setParked(true);
       await session.emitStatus(
         "◆ code-coder asks: Should I also migrate the legacy sessions?",
       );

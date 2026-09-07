@@ -153,6 +153,7 @@ export function foldTrace(
   payload: unknown,
   at: number,
   settled: readonly string[] = [],
+  turnId: number | null = null,
 ): FrameFoldState {
   const idle: FrameFoldState = { open: [...open], settled };
   const trace = payload as TraceLike;
@@ -368,8 +369,12 @@ export function foldTrace(
       return withFrame({ ...frame, delegating: undefined });
     }
     case "session.disposed":
-      // Disposal closes only a frame still open, and with the run's
-      // own reported status — a finished run is not "stopped".
+      // Outside a turn — no turn id — the host is releasing the runtime
+      // at settlement (DR-051): a pause the parked run survives, so its
+      // card stays as it stands. Inside a turn, disposal closes only a
+      // frame still open, with the run's own reported status — a
+      // finished run is not "stopped".
+      if (turnId === null) return found ? withFrame(found) : idle;
       return found
         ? close(found, outcomeOf(stateStatus(body.state)) ?? "stopped")
         : idle;

@@ -492,7 +492,7 @@ export function Composer({
                       : SEND_KEYS
                 }
               >
-                {view.turnActive ? "Send next" : "Send"}
+                {sending ? "Sending…" : view.turnActive ? "Send next" : "Send"}
               </button>
             </>
           }

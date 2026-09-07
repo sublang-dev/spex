@@ -99,7 +99,15 @@ test("end-to-end turn produces ordered persisted records with visibility flags",
   assert.ok(types.includes("player_prompt"));
   assert.ok(types.includes("player_finished"));
   assert.ok(types.includes("captain_telemetry"));
-  assert.equal(types[types.length - 1], "turn_finished");
+  // The turn's last record is its end; what follows is the runtime's
+  // release at settlement, traced outside any turn (core-service-91).
+  const finished = types.lastIndexOf("turn_finished");
+  assert.ok(finished >= 0);
+  for (const envelope of records.slice(finished + 1)) {
+    assert.equal(envelope.record.type, "captain_telemetry");
+    assert.equal((envelope.record as { turnId: number | null }).turnId, null);
+  }
+  await waitFor(() => !manager.getLive(info.id));
 
   const hiddenTypes = records.filter((r) => r.hidden).map((r) => r.record.type);
   assert.deepEqual(
@@ -132,9 +140,13 @@ test("end-to-end turn produces ordered persisted records with visibility flags",
   const second = store.registerProject(secondDir, "proj-b", 2);
   const other = await manager.createSession(second, composed);
   assert.notEqual(other.id, info.id);
+  // The runtime was released at settlement (core-service-91), so the
+  // project admits another session; only a turn in flight refuses.
+  const sibling = await manager.createSession(project, composed);
+  assert.notEqual(sibling.id, info.id);
   await assert.rejects(
     manager.createSession(project, composed),
-    (error: CoreError) => error.code === "busy",
+    (error: CoreError) => error.code === "busy" && /a session|still working/.test(error.message),
   );
 
   await manager.disposeAll();
@@ -218,17 +230,18 @@ test("core-service-35: session state broadcasts carry the live summary", async (
     `named after the turn ended: ${timeline.join(" ")}`,
   );
 
-  const afterTurn = states.at(-1);
-  assert.equal(afterTurn?.live, true);
+  // The turn's end and the runtime's release at settlement each carry
+  // the summary (core-service-34, core-service-91); the release leaves
+  // the session no longer live with its last activity stamped.
+  const afterTurn = states.find((state) => state.turns === 1 && state.turnActive === false);
   assert.equal(afterTurn?.title, "harden the session refresh");
-  assert.equal(afterTurn?.turns, 1);
-
-  await manager.disposeSession(info.id);
-  const ended = states.at(-1);
-  assert.equal(ended?.live, false);
-  assert.ok(ended?.endedAt);
-  assert.equal(ended?.title, "harden the session refresh");
-  assert.equal(ended?.turns, 1);
+  await waitFor(() => states.at(-1)?.live === false);
+  const released = states.at(-1);
+  assert.equal(released?.live, false);
+  assert.ok(released?.endedAt);
+  assert.equal(released?.title, "harden the session refresh");
+  assert.equal(released?.turns, 1);
+  assert.equal(manager.getLive(info.id), undefined, "the runtime is held only for a turn");
 });
 
 async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {

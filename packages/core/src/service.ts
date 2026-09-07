@@ -204,6 +204,8 @@ export class CoreService {
   private ledgerTimer?: NodeJS.Timeout;
   /** Monotonic reload identity; a superseded reload commits nothing. */
   private reloadGeneration = 0;
+  /** The reload in flight, awaited before a runtime opens (core-service-92). */
+  private reloading?: Promise<void>;
   private readonly migrationDiagnostics: {file: string; reason: string; blocking: boolean}[] = [];
 
   private constructor(options: CoreServiceOptions) {
@@ -499,6 +501,27 @@ export class CoreService {
   // -- config ---------------------------------------------------------------
 
   async reloadConfig(): Promise<void> {
+    const generation = ++this.reloadGeneration;
+    const work = this.reloadNow(generation).finally(() => {
+      if (this.reloading === work) this.reloading = undefined;
+    });
+    this.reloading = work;
+    await work;
+  }
+
+  /** A message applies the file's latest settings (core-service-92): a
+   * reload the watcher scheduled or started is awaited before a session
+   * opens, so the debounce window never applies stale settings. */
+  private async settledConfig(): Promise<void> {
+    if (this.reloadTimer) {
+      clearTimeout(this.reloadTimer);
+      this.reloadTimer = undefined;
+      await this.reloadConfig();
+    }
+    while (this.reloading) await this.reloading;
+  }
+
+  private async reloadNow(generation: number): Promise<void> {
     // Reloads overlap: the watcher fires and forgets, two command paths
     // await their own, and external edits add more. Each reload reads the
     // file at its own start, so the newest reload holds the newest content
@@ -506,7 +529,6 @@ export class CoreService {
     // publish an older file's state, and a readiness probe that outlived a
     // newer reload would overwrite that reload's broadcast with entries
     // for a configuration no longer active.
-    const generation = ++this.reloadGeneration;
     let nextState: ConfigState;
     let nextComposed: ComposedConfig | undefined;
     if (!existsSync(this.configPath)) {
@@ -528,8 +550,8 @@ export class CoreService {
           path: this.configPath,
           errors: [message],
         };
-        // Live sessions keep their previously composed config (CORE-2);
-        // only new session creation is blocked.
+        // A turn in flight keeps the config it opened with (core-service-2);
+        // opening a runtime is refused until the file is valid again.
         nextComposed = undefined;
       }
     }
@@ -550,6 +572,7 @@ export class CoreService {
       if (filename && filename !== file) return;
       if (this.reloadTimer) clearTimeout(this.reloadTimer);
       this.reloadTimer = setTimeout(() => {
+        this.reloadTimer = undefined;
         void this.reloadConfig();
       }, 150);
     });
@@ -763,7 +786,7 @@ export class CoreService {
           throw new CoreError("invalid_request", `${path} is not the root of a git work tree`);
         }
         if (this.sessions.listSessions().some((session) => session.projectId === command.projectId && session.live)) {
-          throw new CoreError("busy", "end the project's live session before rebinding it");
+          throw new CoreError("busy", "wait for the project's running turn to finish, or abort it, before rebinding");
         }
         const project = this.store.rebindProject({ id: command.projectId, path,
           ...(command.aliases ? { aliases: command.aliases } : {}),
@@ -843,6 +866,7 @@ export class CoreService {
         if (!project) {
           throw new CoreError("not_found", `no project ${command.projectId}`);
         }
+        await this.settledConfig();
         if (this.configState.status !== "valid" || !this.composed) {
           throw new CoreError(
             "invalid_config",
@@ -876,10 +900,10 @@ export class CoreService {
         if (!session) {
           throw new CoreError("not_found", `no session ${command.sessionId}`);
         }
-        // A live session ends first (core-service-70): deleting under a
-        // running runtime would orphan its agents.
+        // A turn in flight finishes or aborts first (core-service-70):
+        // deleting under a running runtime would orphan its agents.
         if (this.sessions.getLive(session.id)) {
-          throw new CoreError("busy", "end the session before deleting it");
+          throw new CoreError("busy", "wait for the running turn to finish, or abort it, before deleting");
         }
         await this.store.deleteSession(session.id);
         this.broadcast({
@@ -917,9 +941,13 @@ export class CoreService {
             );
           }
         }
-        // A message to an ended session continues it first (DR-042):
-        // the same id, live again, then the turn as usual.
+        // The runtime is held only for a turn (DR-051): a message to a
+        // session that is not live opens it first — on the settings the
+        // file holds now — then the turn as usual. A turn still settling
+        // is waited out, so the message never reaches a closing host.
+        await this.sessions.settled(command.sessionId);
         if (!this.sessions.getLive(command.sessionId)) {
+          await this.settledConfig();
           await this.continueSession(command.sessionId);
         }
         this.sessions.submitTurn(

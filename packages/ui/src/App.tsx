@@ -33,6 +33,7 @@ import {
  * it was asked from (spec-view-57). */
 type PendingRecord = { projectId: string; path: string; origin: RecordOrigin };
 import { editorDirty } from "./lib/spec-view-model.js";
+import { isHistory } from "./lib/sessions.js";
 import { Icon } from "./components/Icon.js";
 
 export type { Surface };
@@ -243,7 +244,6 @@ function sessionTooltip(
 function WorkspaceSurface({
   onNavigate,
   onOpenPalette,
-  onEnded,
   attentionBySession,
   pendingFocus,
   onFocusHandled,
@@ -274,8 +274,6 @@ function WorkspaceSurface({
   onRecordOpened: () => void;
   /** The reader's Back on a record with an origin: return there. */
   onReturn: (origin: RecordOrigin) => void;
-  /** A session just ended: the sidebar reveals where it landed. */
-  onEnded: (sessionId: string) => void;
   /** The ledger-fed attention map the nav shares (DR-035). */
   attentionBySession: Map<string, AttentionItem>;
   /** An attention activation still owed its landing (run-view-91). */
@@ -290,7 +288,6 @@ function WorkspaceSurface({
   const activeSessionId = useAppStore((state) => state.activeSessionId);
   const focusSession = useAppStore((state) => state.focusSession);
   const loadPastSession = useAppStore((state) => state.loadPastSession);
-  const disposeSession = useAppStore((state) => state.disposeSession);
   const submitBossText = useAppStore((state) => state.submitBossText);
   const removeQueued = useAppStore((state) => state.removeQueued);
   const abortTurn = useAppStore((state) => state.abortTurn);
@@ -323,7 +320,6 @@ function WorkspaceSurface({
   const queueIntent = useAppStore((state) => state.queueIntent);
   const stageDispatch = useAppStore((state) => state.stageDispatch);
 
-  const [ending, setEnding] = useState<Record<string, boolean>>({});
   const [seedErrors, setSeedErrors] = useState<
     Record<string, string | undefined>
   >({});
@@ -331,8 +327,8 @@ function WorkspaceSurface({
 
   const project = projects.find((entry) => entry.id === currentProjectId);
   // The working set (run-view-48): the sessions this project has open,
-  // live and ended alike — not derived from liveness, so ending one
-  // leaves its transcript exactly where the eye already is.
+  // working and idle alike — never derived from liveness, so a turn
+  // settling leaves its transcript exactly where the eye already is.
   const open = currentProjectId
     ? (openTabs[currentProjectId] ?? [])
         .map((id) => sessions.find((session) => session.id === id))
@@ -460,21 +456,7 @@ function WorkspaceSurface({
     />
   );
 
-  /** Ending stops the agents; it never moves the reader (run-view-69). */
-  function endSession(session: SessionInfo): void {
-    setEnding((current) => ({ ...current, [session.id]: true }));
-    // The confirm leaves with its buttons: focus lands on the
-    // session's own tab, never on <body> (run-view-50).
-    (tabRefs.current.get(session.id) ?? tabRefs.current.get("start"))?.focus();
-    void disposeSession(session.id)
-      .catch(() => {})
-      .finally(() => {
-        setEnding((current) => ({ ...current, [session.id]: false }));
-        onEnded(session.id);
-      });
-  }
-
-  /** Closing files the tab away and stops nothing (run-view-47). */
+  /** Closing files the tab away and stops nothing (run-view-48). */
   function closeTabAt(session: SessionInfo): void {
     const index = open.findIndex((entry) => entry.id === session.id);
     closeTab(session.projectId, session.id);
@@ -543,9 +525,11 @@ function WorkspaceSurface({
           const title = sessionTitle(views[session.id], session);
           // The dot's meaning is in the tab's name (run-view-48), so
           // color is never the only channel.
+          // Only what the reader cannot act on is named: ownership, or
+          // history the core cannot continue (run-view-48, DR-051).
           const name =
             title +
-            (session.externalWriter === "unknown" ? " — ownership unknown" : session.externalWriter ? " — in use elsewhere" : session.live ? "" : " — ended") +
+            (session.externalWriter === "unknown" ? " — ownership unknown" : session.externalWriter ? " — in use elsewhere" : session.recovery && !session.live ? " — needs recovery" : isHistory(session) ? " — history" : "") +
             (attentionItem
               ? attentionItem.kind === "failure"
                 ? " — failed"
@@ -599,14 +583,14 @@ function WorkspaceSurface({
                   />
                 ) : null}
                 <span className="truncate">{title}</span>
-                {session.live || session.externalWriter ? null : (
+                {isHistory(session) ? (
                   <span
-                    data-testid={`tab-ended-${session.id}`}
+                    data-testid={`tab-history-${session.id}`}
                     className="shrink-0 text-xs text-neutral-500 dark:text-neutral-400"
                   >
-                    ended
+                    history
                   </span>
-                )}
+                ) : null}
               </button>
               <button
                 type="button"
@@ -756,11 +740,7 @@ function WorkspaceSurface({
             connected={connection === "open"}
             error={runErrors[activeSession.id]}
             readOnly={!!activeSession.externalWriter || (!activeSession.live && !activeSession.continuable)}
-            ending={ending[activeSession.id]}
             readinessHint={readinessHint}
-            onEnd={
-              activeSession.live && !activeSession.externalWriter ? () => endSession(activeSession) : undefined
-            }
             onRecover={(action) => useAppStore.getState().recoverSession(activeSession.id, action)}
             onRetryLoad={() => {
               void loadPastSession(activeSession.id, true).catch(() => {});
@@ -824,17 +804,8 @@ export function App() {
         .catch(() => {});
     }
   }, [connection]);
-  // A just-ended session: its sidebar row lights up so the reader sees
-  // where the conversation landed (run-view-69).
-  const [revealSessionId, setRevealSessionId] = useState<string>();
   // Last non-Specs tab per project, for the Specs toggle shortcut.
   const prevTabRef = useRef<Record<string, string>>({});
-
-  useEffect(() => {
-    if (!revealSessionId) return;
-    const timer = setTimeout(() => setRevealSessionId(undefined), 2400);
-    return () => clearTimeout(timer);
-  }, [revealSessionId]);
 
   // Opening with a turn id lands at that turn's place in the thread
   // (run-view-91): the question bubble, failure line, or delivery card.
@@ -1160,7 +1131,6 @@ export function App() {
             useAppStore.getState().deleteSession(sessionId)
           }
           onOpenPalette={() => setPaletteOpen(true)}
-          revealSessionId={revealSessionId}
           foot={configFoot}
         />
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -1179,7 +1149,6 @@ export function App() {
             <WorkspaceSurface
               onNavigate={setSurface}
               onOpenPalette={() => setPaletteOpen(true)}
-              onEnded={setRevealSessionId}
               attentionBySession={attentionBySession}
               pendingFocus={pendingFocus}
               onFocusHandled={() => setPendingFocus(undefined)}

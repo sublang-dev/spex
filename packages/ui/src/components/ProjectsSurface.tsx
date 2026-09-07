@@ -216,7 +216,7 @@ export function OverviewTab({
             disabled={liveCount > 0}
             title={
               liveCount > 0
-                ? "End the live sessions before removing"
+                ? "Wait for the running turn to finish, or abort it, before removing"
                 : "Remove from Spex (repo stays on disk)"
             }
             onClick={() => setConfirmRemove(true)}

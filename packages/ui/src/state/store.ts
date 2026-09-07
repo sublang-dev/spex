@@ -29,6 +29,7 @@ import type {
 } from "@sublang/spex-core/protocol";
 
 import { SpexClient, defaultCoreUrl, type ConnectionStatus } from "../lib/client.js";
+import { currentSessionOf } from "../lib/sessions.js";
 import {
   applyRecord,
   initialSessionView,
@@ -192,12 +193,11 @@ export interface AppState {
   loadProjectMeta(projectId: string, refresh?: boolean): Promise<void>;
   openSession(projectId: string): Promise<SessionInfo>;
   focusSession(sessionId: string): Promise<void>;
-  /** Load an ended session's transcript without focusing tabs.
+  /** Load an idle session's transcript without focusing tabs.
    * `force` retries after a failed load (clears the stale view). */
   loadPastSession(sessionId: string, force?: boolean): Promise<void>;
-  disposeSession(sessionId: string): Promise<void>;
-  /** Delete an ended session's files and every trace (DR-038,
-   * core-service-70); the core refuses a live or foreign one. */
+  /** Delete an idle session's files and every trace (DR-038,
+   * core-service-70); the core refuses a working or foreign one. */
   deleteSession(sessionId: string): Promise<void>;
   recoverSession(sessionId: string, action: "retry" | "discard"): Promise<void>;
   /** Forget a deleted session everywhere — the listing, its tab, its
@@ -224,8 +224,8 @@ export interface AppState {
    * the row leaves every loaded page at once. */
   removeIntent(intentId: string): Promise<void>;
   /** Stage an intent's text into its project's composer (DR-035):
-   * the live session's, else the Captain home's. Returns the staged
-   * composer key ("home" or the session id). */
+   * the current conversation's, else the Captain home's. Returns the
+   * staged composer key ("home" or the session id). */
   stageDispatch(intent: IntentInfo): Promise<string>;
   /** Detach a staged chip without sending (DR-035). */
   clearStagedIntent(key: string): void;
@@ -367,9 +367,14 @@ export const useAppStore = create<AppState>((set, get) => {
   }
 
   /** Dispatch the next queued composer message when a turn is idle
-   * (RUN-8), from live records and backfills alike. */
+   * (RUN-8), from live records and backfills alike. The runtime is
+   * held only for a turn (DR-051), so a session is no longer live once
+   * its turn settled: a queued message then opens it again — but only
+   * on the heels of that turn's end, never because history was loaded
+   * or an interrupted turn was recovered, which are the user's next
+   * action to take. */
   const queuedInFlight = new Set<string>();
-  function maybeDispatchQueued(sessionId: string): void {
+  function maybeDispatchQueued(sessionId: string, cause: "turn-ended" | "state" | "backfill" = "state"): void {
     if (queuedInFlight.has(sessionId)) return;
     const state = get();
     const view = state.views[sessionId];
@@ -378,11 +383,7 @@ export const useAppStore = create<AppState>((set, get) => {
     if (!view || view.turnActive || next === undefined) return;
     const session = state.sessions.find((s) => s.id === sessionId);
     if (session?.externalWriter || session?.turnActive || session?.recovery) return;
-    if (session && !session.live) {
-      // Ended or replaced history cannot authorize an automatic send.
-      // Keep the queue available for the user's next action.
-      return;
-    }
+    if (session && !session.live && (cause !== "turn-ended" || !session.continuable)) return;
     set({
       composers: {
         ...state.composers,
@@ -458,7 +459,7 @@ export const useAppStore = create<AppState>((set, get) => {
       target.loading = false;
       target.loadError = undefined;
       set({ views: { ...fresh.views, [sessionId]: sessionActivity(target, fresh.sessions.find((s) => s.id === sessionId)) } });
-      maybeDispatchQueued(sessionId);
+      maybeDispatchQueued(sessionId, "backfill");
     } catch (cause) {
       const failed = get().views[sessionId];
       if (backfilling.get(sessionId) !== pending) return;
@@ -509,10 +510,13 @@ export const useAppStore = create<AppState>((set, get) => {
         sessions.push(message.session);
         sessions.sort((a, b) => a.createdAt - b.createdAt);
         const view = get().views[message.session.id];
+        // The runtime's release at settlement reports the session no
+        // longer live: that report still belongs to the turn that ended.
+        const wasLive = get().sessions.find((s) => s.id === message.session.id)?.live === true;
         set({ sessions, ...(view ? {
           views: { ...get().views, [message.session.id]: sessionActivity(view, message.session) },
         } : {}) });
-        maybeDispatchQueued(message.session.id);
+        maybeDispatchQueued(message.session.id, wasLive && !message.session.live ? "turn-ended" : "state");
         break;
       }
       case "session.history-replaced":
@@ -560,7 +564,7 @@ export const useAppStore = create<AppState>((set, get) => {
           hasPresentationHeader(record) &&
           (record.type === "turn_finished" || record.type === "turn_aborted")
         ) {
-          maybeDispatchQueued(sessionId);
+          maybeDispatchQueued(sessionId, "turn-ended");
           // Agents may have rewritten specs during the turn: re-read
           // any loaded tree for this project (DR-011 freshness).
           if (session && get().specTrees[session.projectId]) {
@@ -980,25 +984,6 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
 
-    async disposeSession(sessionId: string): Promise<void> {
-      if (get().sessions.find((session) => session.id === sessionId)?.externalWriter) {
-        throw new Error("Session ownership must be idle before ending it here.");
-      }
-      try {
-        await getClient().command("session.dispose", { sessionId });
-      } catch (cause) {
-        const error = cause as { code?: string; message: string };
-        // Already gone: reflect reality instead of erroring.
-        if (error.code === "not_found") return;
-        setRunError(sessionId, `end session failed: ${error.message}`);
-        throw cause;
-      }
-      // Only an explicit, confirmed end discards composer input.
-      if (get().composers[sessionId]) {
-        set({composers: {...get().composers, [sessionId]: {draft: "", queued: []}}});
-      }
-    },
-
     async deleteSession(sessionId: string): Promise<void> {
       const session = get().sessions.find((s) => s.id === sessionId);
       if (session?.externalWriter) throw new Error("Session ownership must be idle before deleting it.");
@@ -1082,9 +1067,10 @@ export const useAppStore = create<AppState>((set, get) => {
         return;
       }
       try {
-        // A message to an ended session continues it (DR-042): the
-        // connection re-subscribed only live sessions, so this one's
-        // records need a subscription before the turn they belong to.
+        // The runtime is held only for a turn (DR-051): a message to a
+        // session that is not live opens it again, and the connection
+        // re-subscribed only live sessions, so this one's records need
+        // a subscription before the turn they belong to.
         if (session && !session.live) await ensureSubscribed(sessionId);
         await getClient().command("turn.submit", {
           sessionId,
@@ -1096,8 +1082,9 @@ export const useAppStore = create<AppState>((set, get) => {
         const error = cause as { code?: string; message: string };
         if (error.code === "busy" && session?.live !== false) {
           // The view lagged reality (e.g. right after a reconnect):
-          // queueing is what the user meant. An ended session's busy
-          // names another live session instead, and is shown as said.
+          // queueing is what the user meant. An idle session's busy
+          // names the sibling still working instead, and is shown as
+          // said.
           enqueue();
           return;
         }
@@ -1210,22 +1197,22 @@ export const useAppStore = create<AppState>((set, get) => {
 
     async stageDispatch(intent: IntentInfo): Promise<string> {
       const title = intent.text.split(/\r?\n/, 1)[0] ?? intent.text;
-      const liveSession = get().sessions.find(
-        (session) => session.live && session.projectId === intent.projectId,
-      );
-      if (liveSession) {
-        await get().focusSession(liveSession.id);
-        get().setDraft(liveSession.id, intent.text);
+      // The project's current conversation is the lane Start reuses
+      // (run-view-86, DR-051): its context is the point of a session.
+      const current = currentSessionOf(get().sessions, intent.projectId);
+      if (current) {
+        await get().focusSession(current.id);
+        get().setDraft(current.id, intent.text);
         set({
           stagedIntents: {
             ...get().stagedIntents,
-            [liveSession.id]: { intentId: intent.id, title },
+            [current.id]: { intentId: intent.id, title },
           },
         });
-        return liveSession.id;
+        return current.id;
       }
-      // No live lane: stage the Captain home, where sending creates
-      // the session in the same motion (run-view-26).
+      // No conversation yet: stage the Captain home, where sending
+      // creates the session in the same motion (run-view-26).
       get().setCurrentProject(intent.projectId);
       get().setWorkspaceTab(intent.projectId, "start");
       get().setHomeDraft(intent.text);

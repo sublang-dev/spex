@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -525,6 +526,39 @@ describe("run-view-88: the Captain home names the queue's head", () => {
       expect(document.activeElement).toBe(screen.getByTestId("next-start")),
     );
     setClientForTests(undefined);
+  });
+
+  test("a pointer Remove leaves the pointer where it is; the Undo line lapses on schedule (run-view-114)", async () => {
+    vi.useFakeTimers();
+    const command = vi.fn(async (type: string) => {
+      if (type === "ledger.get") return { intents: [], attention: [], badge: 0 };
+      return {};
+    });
+    setClientForTests({ command, subscribe: vi.fn(async () => {}) } as never);
+    try {
+      renderHome({ next: { intent: NEXT_INTENT, more: 0 } });
+      // A mouse click carries its click count; a keyboard activation
+      // carries none (detail 0), which is what fireEvent.click sends
+      // by default and the keyboard test above relies on.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("next-remove"), { detail: 1 });
+      });
+      // The removal's promise chain settles inside act; the line is
+      // up before the clock moves.
+      await act(async () => {});
+      const removed = screen.getByTestId("next-removed");
+      const undo = within(removed).getByRole("button", { name: "Undo" });
+      expect(document.activeElement).not.toBe(undo);
+      act(() => {
+        vi.advanceTimersByTime(6_000);
+      });
+      // Nothing held the line open, so it went: the card stands as a
+      // finished removal, never as a prompt.
+      expect(screen.queryByTestId("next-removed")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      setClientForTests(undefined);
+    }
   });
 });
 

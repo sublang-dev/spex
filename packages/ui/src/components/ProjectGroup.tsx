@@ -32,6 +32,8 @@ import type { SessionView } from "../state/reducer.js";
 import { stateLabel, type StatusTone } from "../lib/labels.js";
 import { absoluteTitle, relativeAge } from "../lib/time.js";
 import { usePopover } from "../lib/usePopover.js";
+import { activatedByKeyboard, useUndoLine } from "../lib/useUndoLine.js";
+import { currentSessionOf } from "../lib/sessions.js";
 import { RunningMark } from "./RunningMark.js";
 import { SourcesBand } from "./SourcesTabs.js";
 import { openSourceIntents } from "./ForgeItemRow.js";
@@ -110,8 +112,8 @@ const MENU_ITEM =
 const TEXT_LINK =
   "min-h-6 rounded px-1 text-brand-600 hover:underline dark:text-brand-300";
 
-/** How long a removal stays undoable. */
-const UNDO_MS = 6_000;
+/** How long a dropped intent's outcome line stands. */
+const NOTE_MS = 6_000;
 
 export interface CaptureInput {
   projectId: string;
@@ -627,11 +629,11 @@ function NowBand({
     [],
   );
   if (!session) {
-    // Quiet when no session is live (dashboard-8/28).
+    // Quiet when the project has no conversation yet (dashboard-8/28).
     return (
       <div className="flex flex-col gap-1" data-testid={`now-${project.id}`}>
         <BandHeading>Now</BandHeading>
-        <div className="text-xs text-neutral-500">Idle — no live session.</div>
+        <div className="text-xs text-neutral-500">Idle — no conversation yet.</div>
       </div>
     );
   }
@@ -677,7 +679,7 @@ function NowBand({
       setRefocusDrop(true);
     }
     if (noteTimer.current) clearTimeout(noteTimer.current);
-    noteTimer.current = setTimeout(() => setDropNote(undefined), UNDO_MS);
+    noteTimer.current = setTimeout(() => setDropNote(undefined), NOTE_MS);
   };
 
   return (
@@ -937,7 +939,9 @@ function QueueRow({
   onStart: () => void;
   onMove: (afterIntentId: string | null) => void;
   onEdit: (text: string) => Promise<void>;
-  onRemove: () => Promise<void>;
+  /** Remove acts on the click; a keyboard-driven one hands focus to
+   * the Undo line (dashboard-29). */
+  onRemove: (byKeyboard: boolean) => Promise<void>;
   onOpenIntent: (projectId: string, path: string, anchor: string) => void;
   onOpenSession: (sessionId: string) => void;
   onDragStart: () => void;
@@ -1139,9 +1143,9 @@ function QueueRow({
             // Remove acts on the click (dashboard-29, DR-038): no
             // confirmation, no history — the band's Undo line is the
             // way back.
-            onClick={() => {
+            onClick={(event) => {
               onMenuToggle(false);
-              void onRemove();
+              void onRemove(activatedByKeyboard(event));
             }}
           >
             Remove
@@ -1201,12 +1205,12 @@ function UpNextBand({
   const [draft, setDraft] = useState("");
   // One row menu open at a time (dashboard-29): the band holds whose.
   const [menuFor, setMenuFor] = useState<string>();
-  const [removed, setRemoved] = useState<Removal>();
   const [focusRowId, setFocusRowId] = useState<string>();
   const dragged = useRef<string | undefined>(undefined);
   const bandRef = useRef<HTMLDivElement>(null);
-  const undoRef = useRef<HTMLButtonElement>(null);
-  const undoTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The six-second Undo line, taking focus only from a keyboard-driven
+  // removal (dashboard-29).
+  const { removed, undoRef, show, dismiss } = useUndoLine<Removal>();
 
   const nextId = queue.find((derived) => !derived.blockedBy)?.intent.id;
 
@@ -1216,29 +1220,6 @@ function UpNextBand({
     void onCapture({ projectId: project.id, text }).then(() => setDraft(""));
   };
 
-  // The Undo line stays six seconds — longer while its control holds
-  // focus, so a keyboard user is never raced.
-  const armUndo = () => {
-    if (undoTimer.current) clearTimeout(undoTimer.current);
-    undoTimer.current = setTimeout(() => {
-      if (document.activeElement === undoRef.current) {
-        armUndo();
-        return;
-      }
-      setRemoved(undefined);
-    }, UNDO_MS);
-  };
-  useEffect(
-    () => () => {
-      if (undoTimer.current) clearTimeout(undoTimer.current);
-    },
-    [],
-  );
-  // The removed row took focus with it; the Undo control is the next
-  // sensible place for it.
-  useEffect(() => {
-    if (removed && !removed.error) undoRef.current?.focus();
-  }, [removed]);
   // A restored row gets focus once the ledger serves it again.
   useEffect(() => {
     if (!focusRowId) return;
@@ -1251,29 +1232,30 @@ function UpNextBand({
     setFocusRowId(undefined);
   }, [focusRowId, queue]);
 
-  const remove = async (index: number) => {
+  const remove = async (index: number, byKeyboard: boolean) => {
     const intent = queue[index].intent;
     const afterId = index > 0 ? queue[index - 1].intent.id : null;
     try {
       // A queued intent has never run, so the core's drop leaves no
       // trace (core-service-46): the row's Remove.
       await closeIntent(intent.id, "dropped");
-      setRemoved({ intent, afterId });
+      show({ intent, afterId }, { byKeyboard });
     } catch (cause) {
-      setRemoved({
-        intent,
-        afterId,
-        error: `Couldn't remove “${firstLine(intent.text)}”: ${(cause as Error).message}`,
-      });
+      show(
+        {
+          intent,
+          afterId,
+          error: `Couldn't remove “${firstLine(intent.text)}”: ${(cause as Error).message}`,
+        },
+        { byKeyboard },
+      );
     }
-    armUndo();
   };
 
   const undo = async () => {
     if (!removed || removed.error) return;
     const { intent, afterId } = removed;
-    if (undoTimer.current) clearTimeout(undoTimer.current);
-    setRemoved(undefined);
+    dismiss();
     try {
       const restored = await onCapture({
         projectId: project.id,
@@ -1289,12 +1271,10 @@ function UpNextBand({
       }
       setFocusRowId(restored.id);
     } catch (cause) {
-      setRemoved({
-        intent,
-        afterId,
-        error: `Couldn't undo: ${(cause as Error).message}`,
-      });
-      armUndo();
+      show(
+        { intent, afterId, error: `Couldn't undo: ${(cause as Error).message}` },
+        { byKeyboard: true },
+      );
     }
   };
 
@@ -1362,7 +1342,7 @@ function UpNextBand({
                 void moveIntent(derived.intent.id, afterIntentId)
               }
               onEdit={(text) => editIntent(derived.intent.id, text)}
-              onRemove={() => remove(index)}
+              onRemove={(byKeyboard) => remove(index, byKeyboard)}
               onOpenIntent={onOpenIntent}
               onOpenSession={onOpenSession}
               onDragStart={() => {
@@ -1480,9 +1460,9 @@ export function ProjectGroup({
     : ledgerError
       ? "failed"
       : "loading";
-  const session = sessions.find(
-    (candidate) => candidate.live && candidate.projectId === project.id,
-  );
+  // The Now band shows the project's current conversation
+  // (dashboard-28, DR-051): working, waiting, or idle.
+  const session = currentSessionOf(sessions, project.id);
   return (
     <div
       data-testid={`project-group-${project.id}`}

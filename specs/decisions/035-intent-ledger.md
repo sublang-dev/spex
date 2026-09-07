@@ -11,6 +11,7 @@ Storage form amended by [DR-036](036-file-state-store.md): the intents table bec
 Amended by [DR-038](038-history-is-done-work.md): an intent dropped before it was worked leaves the ledger without a trace, verdicts confirm on one click, and History lists finished intent records beside worked intents.
 Amended (2026-09-02) on the owner's review: the running sessions list again as their own band below the attention queue — a summons and a glance at what is working are two focuses, so the Now band's absorption of the running-sessions section is reversed for the sessions no entry summons; the attention queue stays the summons and the badge still counts it alone.
 Amended (2026-09-02): the permanent deletion deferred below is decided — a remove act retires a closed intent from every band, so a row the Boss no longer wants on the record leaves History behind the inline confirm ([DR-010](010-interface-craft.md) §4) while its acts stay in the append-only log and no state column returns.
+Amended by [DR-051](051-runtime-held-for-a-turn.md): the lane Start reuses is the project's current conversation — derived from stored state — and the fresh lane is the start tab, since no session is ended any more.
 
 ## Context
 
@@ -19,7 +20,7 @@ Amended (2026-09-02): the permanent deletion deferred below is decided — a rem
   Issues and PRs are sources of intents but not the only ones; one gesture should turn either into an intent to address now or later, and the moving pieces should stay visibly connected.
 - The diagnosis, in order of harm:
   - the unit mismatch: the Boss thinks in intents, but the app tracks sessions — work is scattered across attention entries, running-session rows, forge lists, and record lists with no thread from want to verdict;
-  - nothing holds "what's next": every confirmation ends in rediscovery, and the only queue is the per-session composer queue, whose contents die with their session [[run-view-47](../packages/run-view.md#run-view-47)];
+  - nothing holds "what's next": every confirmation ends in rediscovery, and the only queue is the per-session composer queue, whose contents die with their session [[run-view-8](../packages/run-view.md#run-view-8)];
   - "awaiting confirmation" has no durable home: a glance clears the turn-awaiting-review summons, and then nothing remembers a verdict is owed — while the evidence on agent fleets says verification, not generation, is the bottleneck [[1]];
   - issue and PR rows dead-end in the external browser [[projects-6](../packages/projects.md#projects-6)], so capture is retyping by hand;
   - the intents-to-finish list [[dashboard-24](../packages/dashboard.md#dashboard-24)] reads no record status, so long-done records list as work forever;

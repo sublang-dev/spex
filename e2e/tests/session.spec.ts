@@ -86,17 +86,15 @@ test("run-view-98: the first task runs, queues, and ends", async ({ page, app })
   await tab.click();
   await expect(box).toHaveAttribute("placeholder", "Message the Captain…");
 
-  // Ending: the inline confirm says a message can continue it, then
-  // the notice reads the paused conversation above the composer,
-  // which stays (run-view-33, DR-042).
-  await page.getByTestId("end-session").click();
-  await expect(page.getByRole("button", { name: "Keep", exact: true })).toBeVisible();
-  await expect(page.getByText(/A message can continue it later/)).toBeVisible();
-  await page.getByRole("button", { name: "End", exact: true }).click();
-  await expect(page.getByTestId("ended-notice")).toContainText("a message continues it");
+  // The turn settled: the runtime is held only for a turn (DR-051), so
+  // nothing ends — no end control, no notice, the composer ready, and
+  // the sidebar row reading idle (run-view-69, run-view-73).
+  await expect(page.getByTestId("end-session")).toHaveCount(0);
+  await expect(page.getByTestId("history-notice")).toHaveCount(0);
   await expect(page.getByTestId("boss-composer")).toBeEnabled();
-  await expect(page.getByRole("button", { name: "New session", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New session", exact: true })).toHaveCount(0);
   await expect(tree).toContainText(/fix the token refresh/i);
+  await expect(page.getByTestId(/^sidebar-mark-/).first()).toHaveAttribute("data-life", "idle");
 });
 
 test("run-view-99: a player question parks the session until the Boss replies", async ({

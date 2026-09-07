@@ -22,7 +22,7 @@ While at least one attention entry derives across the registered projects' inten
 | Interrupted | one entry per interrupted intent, leading with the intent's title and showing its project, session, and interruption reason — question, permission, or failure — with a one-line summary, the unacknowledged failure in the red chase tone ([DR-029](../decisions/029-session-history-home.md)) |
 | Finished | one entry per finished intent awaiting a verdict, leading with the intent's title and showing its project, session, and the run's stats [[dashboard-35](#dashboard-35)] with review rounds foremost |
 
-- A live session serving no intent stands in with session-level entries: its question, permission, and failure conditions — the same conditions, holding outside any intent's turn range — join the interrupted band, and at most one turn-to-review entry per session, for a finished Boss turn later than the session's persisted last-viewed marker, joins the finished band.
+- A project's current conversation [[core-service-93](core-service.md#core-service-93)] serving no intent stands in with session-level entries: its question, permission, and failure conditions — the same conditions, holding outside any intent's turn range — join the interrupted band, and at most one turn-to-review entry per session, for a finished Boss turn later than the session's persisted last-viewed marker, joins the finished band ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 - An entry's title owns its row's slack; the project name truncates at 10rem with the full name in its title, and in a row narrower than 28rem the age hides, the project name too below 20rem ([DR-041](../decisions/041-chrome-that-fits.md)).
 
 #### dashboard-2
@@ -51,7 +51,7 @@ While an attention entry is displayed, when its clearing condition arrives, the 
 | Finished intent | a verdict — Confirm or Drop — closing the intent |
 | Session question | the next Boss turn starting in the session |
 | Session permission | the request being decided, or its turn ending |
-| Session failure | the next Boss turn starting in the session, or the session ending |
+| Session failure | the next Boss turn starting in the session, or another conversation becoming the project's current one [[core-service-93](core-service.md#core-service-93)] |
 | Session turn to review | the session's persisted last-viewed marker advancing past the turn |
 
 - Resolving one entry removes no other entry.
@@ -112,12 +112,12 @@ Where a project has done work — intents closed after a turn of theirs ended fi
 
 #### dashboard-28
 
-While the project's one live session [[core-service-4](core-service.md#core-service-4)] runs, the group's Now band shall show that session's status mark, its active playbook once a run draws one (nothing in its place before), human-readable engagement state label — tinted by the state's tone, with the raw state id in the tooltip, reading "deciding" or "working" rather than "idle" while a turn is active with no leaf state [[run-view-59](run-view.md#run-view-59)] ([DR-010](../decisions/010-interface-craft.md) §2) — and the session's start as an age ("started 3m ago") with the absolute moment in its tooltip, together with the open intent the session serves, or the latest Boss turn's text for a session serving no intent:
+While the project has a current conversation [[core-service-93](core-service.md#core-service-93)], the group's Now band shall show that session's status mark, its active playbook once a run draws one (nothing in its place before), human-readable engagement state label — tinted by the state's tone, with the raw state id in the tooltip, reading "deciding" or "working" rather than "idle" while a turn is active with no leaf state [[run-view-59](run-view.md#run-view-59)] ([DR-010](../decisions/010-interface-craft.md) §2) — and the session's start as an age ("started 3m ago") with the absolute moment in its tooltip, together with the open intent the session serves, or the latest Boss turn's text for a session serving no intent:
 
 - the band updates as session records arrive, without a manual refresh;
 - the served intent carries Drop beside the session row [[dashboard-41](#dashboard-41)];
 - the text owns the row's slack; in a row narrower than 28rem the start age hides, the playbook name too below 20rem, the mark and the state label staying ([DR-041](../decisions/041-chrome-that-fits.md));
-- while no session is live, the band stays quiet with its empty-state note [[dashboard-8](#dashboard-8)].
+- while the project has no current conversation, the band stays quiet with its empty-state note [[dashboard-8](#dashboard-8)] ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 
 #### dashboard-41
 
@@ -133,7 +133,7 @@ The group's Up next band shall list the project's queued intents in rank order, 
 - a blocked intent — one whose after-link names a still-open intent [[dashboard-10](#dashboard-10)] — stays visible at its place with "after ⟨title⟩", the predecessor's project named when it lives in another project, its Start disabled with the reason ([DR-026](../decisions/026-data-graphics-craft.md) §2), and is never presented as next;
 - reorder works by drag — the grip at the row's left is the affordance — by keyboard (Alt+↑/↓ on the focused row), and by the row menu's Move up and Move down, which take the same step, are disabled at the queue's ends, and name the shortcut; a reorder changes only the queue's rank order;
 - each row's actions live in a ⋯ menu that follows the house popover idiom ([DR-010](../decisions/010-interface-craft.md) §6) — focus moves into it on open and returns to the trigger on close, Escape and an outside click close it, at most one row menu is open — offering Move up, Move down, Edit text, Remove, and, for a sourced intent, a provenance action named after what it opens: "Issue #N" or "PR #N" opening the page, the record row [[dashboard-40](#dashboard-40)] opening the record, "Session" opening the capturing session;
-- Remove acts on the click with no confirmation and leaves no history ([DR-038](../decisions/038-history-is-done-work.md)), then a status line — "Removed “⟨title⟩” — Undo", taking focus and lasting six seconds beyond the last moment its control holds it — re-queues the same text and provenance at the row's former place.
+- Remove acts on the click with no confirmation and leaves no history ([DR-038](../decisions/038-history-is-done-work.md)), then a status line — "Removed “⟨title⟩” — Undo", lasting six seconds beyond the last moment its control holds focus, which it takes from a keyboard-driven removal alone — re-queues the same text and provenance at the row's former place; a pointer removal leaves the pointer where it is, so the line lapses on schedule and never stands as a prompt.
 
 ### Record Rows
 
@@ -208,7 +208,7 @@ While a Dashboard section or band has no content, the Dashboard shall display gu
 | Running | no live session holds a turn in flight unattended by the queue [[dashboard-50](#dashboard-50)] | a quiet note that nothing is running |
 | Project groups | no registered project | how to register a project, with a navigation control to the Workspace |
 | History | no done work, once the first history page has answered | a note that nothing is done here yet — "Loading…" until then |
-| Now | no live session | a quiet idle note |
+| Now | no current conversation [[core-service-93](core-service.md#core-service-93)] | a quiet idle note |
 | Up next | no queued intent | the inline add row [[dashboard-29](#dashboard-29)] with capture guidance |
 | Sources | no forge binding, or forge adapter not ready | the GitHub setup guidance naming the unmet condition [[projects-7](projects.md#projects-7)] in place ([DR-006](../decisions/006-projects-and-forge.md)) |
 
@@ -266,7 +266,7 @@ Where turns attribute to intents, an intent's turn range shall run from its disp
 
 #### dashboard-34
 
-While an intent's dispatch turn ended aborted, or its session died before the dispatch turn finished, the fold shall derive that intent released — Queued again — with nothing written:
+While an intent's dispatch turn ended aborted, or its session stopped before the dispatch turn finished, the fold shall derive that intent released — Queued again — with nothing written:
 
 - the dispatch stamps remain as history, and a later dispatch re-writes them;
 - the row keeps its rank, and its text is editable again.
@@ -319,7 +319,7 @@ Where fixture intent rows, records, and review state are persisted to the app st
 
 #### dashboard-36
 
-Where a fixture project holds a queue of three intents, the second after-linked to the first, when the fixture stream dispatches the first, runs a follow-up Boss turn, dispatches the third into a turn that aborts, then finishes the first and closes it done, the test suite shall assert each derived state in sequence: Working on dispatch and again on the follow-up owned by the newest open intent [[dashboard-10](#dashboard-10)] [[dashboard-33](#dashboard-33)], the aborted dispatch releasing the third to Queued at its kept rank with its stamps intact and text editable [[dashboard-34](#dashboard-34)], Finished when its last turn ends finished [[dashboard-10](#dashboard-10)], the after-linked second blocked and never offered as next until the first closes, then unblocked as the project's next [[dashboard-10](#dashboard-10)] [[dashboard-29](#dashboard-29)], a reorder by keyboard and by the row menu's Move up and Move down — disabled at the ends — yielding the new rank order [[dashboard-29](#dashboard-29)], the row menu opening with focus inside and closing on Escape and on an outside click with focus back on its trigger, one menu open at a time [[dashboard-29](#dashboard-29)], and a Remove followed by Undo re-queuing the same text and provenance at the row's former place, the status line outlasting six seconds only while its control holds focus [[dashboard-29](#dashboard-29)], and each sourced row's provenance item named after what it opens, the record's drawn as the record row [[dashboard-29](#dashboard-29)] [[dashboard-40](#dashboard-40)].
+Where a fixture project holds a queue of three intents, the second after-linked to the first, when the fixture stream dispatches the first, runs a follow-up Boss turn, dispatches the third into a turn that aborts, then finishes the first and closes it done, the test suite shall assert each derived state in sequence: Working on dispatch and again on the follow-up owned by the newest open intent [[dashboard-10](#dashboard-10)] [[dashboard-33](#dashboard-33)], the aborted dispatch releasing the third to Queued at its kept rank with its stamps intact and text editable [[dashboard-34](#dashboard-34)], Finished when its last turn ends finished [[dashboard-10](#dashboard-10)], the after-linked second blocked and never offered as next until the first closes, then unblocked as the project's next [[dashboard-10](#dashboard-10)] [[dashboard-29](#dashboard-29)], a reorder by keyboard and by the row menu's Move up and Move down — disabled at the ends — yielding the new rank order [[dashboard-29](#dashboard-29)], the row menu opening with focus inside and closing on Escape and on an outside click with focus back on its trigger, one menu open at a time [[dashboard-29](#dashboard-29)], and a Remove followed by Undo re-queuing the same text and provenance at the row's former place, the status line outlasting six seconds only while its control holds the focus a keyboard removal gave it, a pointer removal's line lapsing on schedule with focus untouched [[dashboard-29](#dashboard-29)], and each sourced row's provenance item named after what it opens, the record's drawn as the record row [[dashboard-29](#dashboard-29)] [[dashboard-40](#dashboard-40)].
 
 #### dashboard-42
 

@@ -1004,7 +1004,7 @@ export class Store {
 
   /** Shared lease and manifest-last deletion, followed by index cleanup. */
   async deleteSession(id: string): Promise<void> {
-    if (this.sessions.get(id)?.live) throw new Error("end the session before deleting it");
+    if (this.sessions.get(id)?.live) throw new Error("wait for the running turn to finish, or abort it, before deleting");
     if (this.shared || this.sessionsDir) await this.sessionStore().delete(id);
     this.dropSession(id);
   }

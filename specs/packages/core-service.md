@@ -48,7 +48,7 @@ On every load and reload:
 
 - On success, the resulting config state is broadcast to all connected clients.
 - On failure, a config error naming the offending entry and the violated rule is broadcast, and session creation requests are rejected while no valid config is active.
-- Live sessions composed under a previously valid config continue unaffected by a later invalid edit.
+- A turn in flight keeps the config it opened with; the next message opens with the current config, or is refused naming the config error [[core-service-73](#core-service-73)] ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 - Where the file is a profiles-era config, the load migrates it in place per the launcher's semantics ([DR-019](../decisions/019-inline-agent-configuration.md)): named profiles inline into agent blocks, the `profiles` map is deleted, the pre-migration file is backed up beside the config with comments surviving, and a `profile` naming a missing entry is a config error that leaves the file untouched.
 - Validation fails closed on the same defect classes as the playbook launcher [[core-service-16](#core-service-16)].
 
@@ -72,10 +72,37 @@ Where the shared config path is the default one and holds nothing, when the core
 
 Where a project is registered ([DR-006](../decisions/006-projects-and-forge.md)) and the active config is valid, when a client requests a session for that project, the core service shall create a live session whose embedded runtime is initialized with the project directory as its working directory, and shall report the new session to subscribed clients:
 
-- While a live session exists for a project, a further session request for the same project is rejected and creates no session.
+- While a session of the project is live — a turn in flight or settling [[core-service-91](#core-service-91)] — or another host holds one, a further session request for the same project is rejected `busy` naming that session, and creates no session ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 - Live sessions for distinct projects run concurrently.
-- While a session is live, a client's disposal request persists the session's Captain snapshot [[core-service-72](#core-service-72)], disposes the session's runtime, reports the session as ended, and a subsequent session request for the same project is accepted; ending pauses the conversation, which a Boss message continues [[core-service-73](#core-service-73)] ([DR-042](../decisions/042-sessions-continue.md)).
+- While a session is live, a client's disposal request aborts its turn, persists the session's Captain snapshot [[core-service-72](#core-service-72)], disposes the session's runtime, and reports the session as no longer live; a Boss message continues it [[core-service-73](#core-service-73)].
 - Where disposal fails, the core reports the error and retains the session's lease and project reservation until cleanup is confirmed; stopping the owning process allows later recovery through the shared lease checks ([DR-048](../decisions/048-failed-session-cleanup.md)).
+
+#### core-service-91
+
+When a Boss turn settles on a live session, the core service shall release the session's runtime — the Playbook lease with it — and report the session as no longer live, so the runtime is held only for a turn and every later message opens it again with the current config [[core-service-73](#core-service-73)] ([DR-051](../decisions/051-runtime-held-for-a-turn.md)):
+
+- a settled checkpoint the core could not continue from disk — unresolved repository effects — keeps its runtime held until a later turn leaves it continuable;
+- a failed or aborted turn releases the runtime as before, the session's recovery state reported [[core-service-32](#core-service-32)];
+- the release preserves the local provider hints written at settlement, so the next open resumes the Captain's and the players' provider conversations where they exist.
+
+#### core-service-92
+
+When a session's runtime is opened for a message [[core-service-73](#core-service-73)], the core service shall project the current config onto the session's stored members — the playbooks of its stored structure, and its referenced players in stored order — and shall compare that projection's structure with the stored one before opening ([DR-051](../decisions/051-runtime-held-for-a-turn.md)):
+
+| Case | Outcome |
+| --- | --- |
+| Same structure, same tuning | the runtime opens on the stored projection |
+| Same structure, changed model, effort, or fast mode | the runtime opens on the new projection, applied from the next call |
+| A stored playbook disabled, or changed in its source, command, options, or a binding's player; the Captain's or a stored player's adapter, instruction, or permissions changed; a stored player gone | refused `invalid_config` naming each changed field and offering a new session, the runtime never opened |
+
+- a playbook or player the session never had is left out of the projection and changes nothing;
+- a pending config reload is awaited before the projection is taken, so the settings applied are the file's latest.
+
+#### core-service-93
+
+When a client requests the session list or the ledger, the core service shall derive each project's current conversation from stored state — its live session, else its most recently active session that continues [[core-service-32](#core-service-32)] and no other host owns — and shall fold that conversation as the project's lane: its standing conditions and stand-ins [[core-service-49](#core-service-49)] ([DR-051](../decisions/051-runtime-held-for-a-turn.md)):
+
+- a disposal trace the runtime emits outside a turn — carrying no turn id — is a pause, never the Captain dismissing a parked run, so a question parked at that moment stands until the next Boss turn starts.
 
 #### core-service-72
 
@@ -89,7 +116,7 @@ When a Boss turn or live session ends, the core service shall checkpoint through
 
 When a client sends `session.delete` for a stored session, the core service shall delete the session's files and every in-memory trace of it — its records, turns, usage, and viewed marker — and broadcast the removal to subscribed clients, announcing `intents.changed` for its project [[core-service-51](#core-service-51)] ([DR-038](../decisions/038-history-is-done-work.md)):
 
-- a live session is refused with a `busy` error: it ends first [[core-service-4](#core-service-4)];
+- a live session is refused with a `busy` error naming it: its turn finishes or is aborted first [[core-service-4](#core-service-4)] ([DR-051](../decisions/051-runtime-held-for-a-turn.md));
 - a session from either interface is deleted through the same shared-store operation and lease check [[core-service-75](#core-service-75)];
 - an open intent the session served re-derives as queued, and a closed one keeps its verdict [[core-service-49](#core-service-49)].
 
@@ -104,7 +131,7 @@ When a client requests deletion of any stored session, the core service shall ob
 
 When a client requests the session list, the core service shall reply with every stored session's lifecycle fields and its conversation summary ([DR-029](../decisions/029-session-history-home.md)):
 
-- each entry carries the session's resolved project, creation and end times, liveness and `turnActive`, which stays true until the turn transaction settles or fails; host of origin is not an admission condition;
+- each entry carries the session's resolved project, its creation time, its last activity — the wire field `endedAt`, null while live — liveness and `turnActive`, which stays true until the turn transaction settles or fails; host of origin is not an admission condition;
 - a non-live session has no active turn; historical records alone never establish liveness, and a session acquired by this core is never reported as externally owned;
 - each entry says whether a Boss message continues it, using the shared checkpoint, replay and execution checks [[core-service-73](#core-service-73)], with a reason when history-only;
 - each uncertain entry carries `recovery: {state: "uncertain", input}` with the exact saved input; uncertainty is never reported as normal continuability;
@@ -114,7 +141,7 @@ When a client requests the session list, the core service shall reply with every
 
 #### core-service-34
 
-When the core service reports a session's state to subscribed clients — at each turn's start and end, when the session ends, and when a message continues it [[core-service-73](#core-service-73)], and after recovery [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)] — the report shall carry that session's conversation summary as the listing carries it [[core-service-32](#core-service-32)] ([DR-029](../decisions/029-session-history-home.md)), never the summary the session was created with:
+When the core service reports a session's state to subscribed clients — at each turn's start and end, when its runtime is released [[core-service-91](#core-service-91)] or opened by a message [[core-service-73](#core-service-73)], and after recovery [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)] — the report shall carry that session's conversation summary as the listing carries it [[core-service-32](#core-service-32)] ([DR-029](../decisions/029-session-history-home.md)), never the summary the session was created with:
 
 - A session is named from the turn that starts, not the turn that finishes, so a running session is never listed as having said nothing.
 
@@ -124,7 +151,7 @@ When a rescan replaces an indexed session's history, the core shall publish `ses
 
 #### core-service-85
 
-When a client sends `project.rebind` with `projectId`, local `path`, optional recorded `aliases` and optional Git `revision`, the core shall apply the existing-identity binding rules [[storage-6](storage.md#storage-6)] after verifying that the path is a repository root and the project has no live session.
+When a client sends `project.rebind` with `projectId`, local `path`, optional recorded `aliases` and optional Git `revision`, the core shall apply the existing-identity binding rules [[storage-6](storage.md#storage-6)] after verifying that the path is a repository root and the project has no live session — no turn in flight ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 
 #### core-service-86
 
@@ -139,22 +166,22 @@ When a client sends `storage.diagnostics`, the core shall report each unresolved
 While a session is live and no boss turn is active on it, when a client submits Boss composer text for that session, the core service shall start a boss turn on the session's runtime and stream the turn-started record to subscribed clients:
 
 - While a boss turn is active on a session, a further Boss submission for that session is rejected with a busy error and starts no turn, so boss turns on one session run strictly one at a time.
-- A submission for an ended session continues it first [[core-service-73](#core-service-73)], then starts the turn as above.
+- A submission for a session that is not live opens its runtime first [[core-service-73](#core-service-73)], then starts the turn as above.
 
 #### core-service-73
 
-While a session is ended, when a client submits Boss text for it, the core service shall request continuation through Playbook's shared lifecycle [[1]], restore the same logical session identity and checkpoint [[core-service-74](#core-service-74)], and report it live before starting the turn [[core-service-34](#core-service-34)], or refuse by these cases:
+While a session is not live, when a client submits Boss text for it, the core service shall request continuation through Playbook's shared lifecycle [[1]] with the current config projected onto the session's stored members [[core-service-92](#core-service-92)], restore the same logical session identity and checkpoint [[core-service-74](#core-service-74)], and report it live before starting the turn [[core-service-34](#core-service-34)], or refuse by these cases:
 
 | Case | Reply |
 | --- | --- |
-| Another session of the project is live, or a session lease is active | `busy`, naming the holder or session to end |
+| Another session of the project is live, or a session lease is active | `busy`, naming the session working or the holder |
 | Unsupported recovery, no checkpoint, incomplete stream or digest mismatch | `invalid_request`, history-only with the failing condition |
 | Uncertain work | `invalid_request`, use explicit Retry or Discard [[core-service-82](#core-service-82)] [[core-service-83](#core-service-83)] |
 | Unresolved repository effects | `invalid_request`, reconcile the stored work before continuation |
 | Missing/ambiguous project binding | `invalid_request`, bind an existing project identity first |
 | Changed checkpoint repository/module paths | `invalid_request`, relocation unsupported; history remains readable |
 | Missing or invalid config | `invalid_config`, as for creation |
-| Structural or runtime mismatch | `invalid_config`, naming the drift and offering a new session |
+| Structural or runtime mismatch | `invalid_config`, naming each changed field and offering a new session [[core-service-92](#core-service-92)] |
 
 - desktop and CLI checkpoints use the same cases; missing provider hints alone do not refuse continuation;
 - parked questions resume in their retained frames; a refusal starts no turn and stamps no intent [[core-service-47](#core-service-47)].
@@ -234,7 +261,7 @@ While a session is live, when a client's Boss submission for it [[core-service-5
 - a submission that never starts a turn stamps nothing, and the intent stays queued;
 - a later dispatch of the same intent re-writes the stamps;
 - the stamp attributes turns: an intent's turns run from its dispatch turn up to, not including, the next turn in the session that is another intent's dispatch turn, so the newest dispatched open intent owns follow-up turns;
-- an intent is queued while it is open and holds no standing dispatch — never dispatched, its dispatch turn ended aborted, or its dispatching session ended before that turn finished — the release derived, never written: the stamps remain and the queue position keeps its rank.
+- an intent is queued while it is open and holds no standing dispatch — never dispatched, its dispatch turn ended aborted, or its dispatching session stopped before that turn finished — the release derived, never written: the stamps remain and the queue position keeps its rank.
 
 #### core-service-48
 
@@ -249,7 +276,7 @@ When a client sends `ledger.get`, the core service shall reply with the cross-pr
 | Attention entries | two bands — intents standing interrupted on the Boss (a pending question, a permission request, or an unacknowledged failure among their turns), then intents finished and awaiting a verdict — each band ordered longest waiting first by condition onset |
 | Run stats | each finished entry carries stats folded from its intent's attributed turns [[core-service-47](#core-service-47)]: turn count, elapsed time, and the review rounds when any |
 | Session stand-ins | a session bound to no intent enters the same bands for its own question, permission request, failure, or finished turn past the viewed marker [[core-service-48](#core-service-48)] |
-| Project groups | per project: the live session's state, the queue in rank order with each blocked intent marked [[core-service-45](#core-service-45)], and the open intents' source-artifact references [[core-service-42](#core-service-42)] |
+| Project groups | per project: the current conversation's state [[core-service-93](#core-service-93)], the queue in rank order with each blocked intent marked [[core-service-45](#core-service-45)], and the open intents' source-artifact references [[core-service-42](#core-service-42)] |
 | Badge | the count of all attention entries |
 
 #### core-service-50
@@ -261,7 +288,7 @@ When a client sends `ledger.history` for a project, the core service shall reply
 
 #### core-service-51
 
-When the intents table is written [[core-service-52](#core-service-52)], or a session event lands that can change a derived intent state — a turn's start, finish, or abort, a session's end, or an interruption-condition record — the core service shall broadcast an `intents.changed` message naming the affected project to subscribed clients, so every consumer re-reads the one core-side fold [[core-service-49](#core-service-49)] instead of deriving its own ([DR-035](../decisions/035-intent-ledger.md)).
+When the intents table is written [[core-service-52](#core-service-52)], or a session event lands that can change a derived intent state — a turn's start, finish, or abort, a runtime's release, or an interruption-condition record — the core service shall broadcast an `intents.changed` message naming the affected project to subscribed clients, so every consumer re-reads the one core-side fold [[core-service-49](#core-service-49)] instead of deriving its own ([DR-035](../decisions/035-intent-ledger.md)).
 
 ### Intent Storage
 
@@ -375,7 +402,7 @@ Where the host shell names a legacy SQLite store, when the core service starts o
 When a host shell stops the core service, the core service shall persist every live session's Captain snapshot [[core-service-72](#core-service-72)] and attempt disposal of its runtime, close its endpoint and its store, and report the disposal failures to the host once every session has been attempted:
 
 - One session's disposal failure neither skips another session's disposal nor leaves the endpoint or the store open.
-- Successful cleanup reports the session as ended; failed cleanup retains its ownership evidence [[core-service-4](#core-service-4)].
+- Successful cleanup reports the session as no longer live; failed cleanup retains its ownership evidence [[core-service-4](#core-service-4)].
 
 ## Internal Behavior
 
@@ -507,11 +534,11 @@ Where a stored session held two turns and a failure record, and a second stored 
 
 #### core-service-35
 
-Where a client subscribes to a session that then runs a fake-adapter turn and is disposed, the test suite shall assert the broadcast contract of [[core-service-34](#core-service-34)]: the state reported at the turn's start already carries the session's title, and the states reported at the turn's end and the session's end each carry the title and turn count, not the zeros the session was created with.
+Where a client subscribes to a session that then runs a fake-adapter turn, the test suite shall assert the broadcast contract of [[core-service-34](#core-service-34)]: the state reported at the turn's start already carries the session's title, and the states reported at the turn's end and at the runtime's release [[core-service-91](#core-service-91)] each carry the title and turn count, not the zeros the session was created with.
 
 #### core-service-40
 
-Where a live session's runtime fails its disposal, the test suite shall request that session's disposal over the protocol and assert the failing-disposal case of [[core-service-4](#core-service-4)]: the request reports the failure and a fresh session request for the same project remains blocked.
+Where a live session's runtime fails its disposal, the test suite shall request that session's disposal over the protocol during its turn and assert the failing-disposal case of [[core-service-4](#core-service-4)]: the request reports the failure and a fresh session request for the same project remains blocked.
 
 ### Shutdown Coverage
 
@@ -564,7 +591,7 @@ Where a fixture session — manifest naming a registered project's directory as 
 
 #### core-service-71
 
-Where a stored session has ended and a second session is live, the test suite shall assert the deletion contract of [[core-service-70](#core-service-70)]: `session.delete` on the ended session removes its files, drops it from the listing [[core-service-32](#core-service-32)] and its history from `history.get`, and a subscribed client receives the removal; the same command on the live session is refused `busy`; and on a fixture session another host wrote [[core-service-60](#core-service-60)] whose lease names this live process it is refused `busy` naming the holder [[core-service-75](#core-service-75)], with the files byte-identical afterwards.
+Where a stored session is idle and a second session holds a turn in flight, the test suite shall assert the deletion contract of [[core-service-70](#core-service-70)]: `session.delete` on the idle session removes its files, drops it from the listing [[core-service-32](#core-service-32)] and its history from `history.get`, and a subscribed client receives the removal; the same command on the live session is refused `busy`; and on a fixture session another host wrote [[core-service-60](#core-service-60)] whose lease names this live process it is refused `busy` naming the holder [[core-service-75](#core-service-75)], with the files byte-identical afterwards.
 
 #### core-service-78
 
@@ -576,7 +603,9 @@ When an integration suite changes stored history and project bindings through a 
 
 #### core-service-77
 
-When the integration suite ends and restarts a shared-store session, it shall verify that either a desktop- or CLI-created supported checkpoint lists continuable [[core-service-32](#core-service-32)], continues with the same identities and stream [[core-service-74](#core-service-74)], and persists recovery without provider tokens [[core-service-72](#core-service-72)]; active leases/project sessions, history-only recovery, damaged digests, uncertain work, missing bindings and path/config drift shall refuse before a turn or intent stamp [[core-service-73](#core-service-73)].
+When the integration suite settles and restarts a shared-store session, it shall verify that either a desktop- or CLI-created supported checkpoint lists continuable [[core-service-32](#core-service-32)], that its runtime was released at settlement with the provider hints kept [[core-service-91](#core-service-91)], continues with the same identities and stream [[core-service-74](#core-service-74)], and persists recovery without provider tokens [[core-service-72](#core-service-72)]; that a message opens it on the current tuning while an added playbook changes nothing and a structural change is refused naming the field [[core-service-92](#core-service-92)]; and that active leases and turns in flight, history-only recovery, damaged digests, uncertain work, missing bindings and path/config drift shall refuse before a turn or intent stamp [[core-service-73](#core-service-73)]:
+
+- a session parked on a question keeps its summons across the release and answers where it waited [[core-service-93](#core-service-93)].
 
 #### core-service-63
 

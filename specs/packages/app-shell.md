@@ -52,7 +52,7 @@ When a UI flow requests a file or directory selection (for example, choosing a p
 While at least one project session has an active turn, when the user initiates quit, the app shall show a confirmation naming the projects with active turns and shall quit only after explicit confirmation:
 
 - When the user cancels that confirmation, the app keeps running with those sessions unaffected.
-- When the app quits, the app disposes every live session's runtime [[core-service-39](core-service.md#core-service-39)] before the process exits, leaving no orphan agent processes.
+- When the app quits, the app disposes every live session's runtime [[core-service-39](core-service.md#core-service-39)] before the process exits, leaving no orphan agent processes; the confirmation says a message continues the conversation later ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 
 ### Offline Operation
 

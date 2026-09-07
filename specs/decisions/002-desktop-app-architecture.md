@@ -7,6 +7,7 @@
 
 Accepted; the Settings surface's profile inventory is amended by [DR-019](019-inline-agent-configuration.md) — agents carry inline settings, so Settings owns the Captain's agent and adapter readiness while per-role agents live with their playbooks; distribution is amended by [DR-040](040-source-only-app-releases.md) — app releases ship as source on GitHub Releases, with binaries deferred until signing exists.
 Supported host platforms are amended by [DR-049](049-supported-app-hosts.md).
+The project session's one-live-session rule is amended by [DR-051](051-runtime-held-for-a-turn.md): one working turn per project, the runtime held only for a turn.
 
 ## Context
 

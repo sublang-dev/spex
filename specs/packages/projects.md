@@ -89,7 +89,7 @@ When the user picks a project from the palette or opens one of its sessions from
 
 When the user confirms removal in the Overview tab, the workspace shall forget the project and clear it from the sidebar, leaving the repository directory, its files, and its git state on disk unmodified:
 
-- While the project has a live session, the Overview tab disables removal, stating that sessions must be ended first.
+- While a session of the project has a turn in flight, the Overview tab disables removal, stating that the running turn must finish or be aborted first ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 - Removal confirms inline with Remove and Keep ([DR-010](../decisions/010-interface-craft.md) §4); Keep returns focus to the Remove control, and a completed removal moves focus to the sidebar's Dashboard entry — never to the page body.
 
 ### Labels and Vocabulary
@@ -102,7 +102,7 @@ The project palette's path row shall offer distinct "Add" (an existing repo) and
 
 #### projects-23
 
-While a project has running sessions or sessions needing a human, its palette row shall show that state — a pulsing emerald dot with the running count, and an amber (question) or red (failure) dot with the needs-you count — with text labels alongside the colors ([DR-010](../decisions/010-interface-craft.md) §7/§8).
+While a project has sessions with a turn in flight or sessions needing a human, its palette row shall show that state — a pulsing emerald dot with the running count, and an amber (question) or red (failure) dot with the needs-you count — with text labels alongside the colors ([DR-010](../decisions/010-interface-craft.md) §7/§8).
 
 #### projects-24
 

@@ -12,6 +12,8 @@ import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { ProjectInfo, SessionInfo } from "@sublang/spex-core/protocol";
 
 import type { AttentionItem } from "../state/dashboard.js";
+import { useAppStore } from "../state/store.js";
+import { isHistory } from "../lib/sessions.js";
 import { keyLabel } from "../lib/shortcuts.js";
 import { absoluteTitle, compactAge, relativeAge } from "../lib/time.js";
 import { Icon, type IconName } from "./Icon.js";
@@ -19,7 +21,7 @@ import { InlineConfirm } from "./InlineConfirm.js";
 import logo from "../assets/spex-logo.svg";
 
 /** Sessions listed per project before the reveal-the-rest control
- * (run-view-67); the ended window only — a live session always shows. */
+ * (run-view-67); the idle window only — a working session always shows. */
 const RECENT_WINDOW = 5;
 
 export type Surface = "Dashboard" | "Workspace" | "Playbooks" | "Settings";
@@ -68,46 +70,50 @@ export interface NavRailProps {
   onPickProject(projectId: string): void;
   onActivateSession(sessionId: string): void;
   onNewSession(projectId: string): void;
-  /** Delete an ended session this core owns (DR-038); rejects with
+  /** Delete an idle session this core owns (DR-038); rejects with
    * the core's reason, which the row shows. */
   onDeleteSession(sessionId: string): Promise<void>;
   onOpenPalette(): void;
-  /** A just-ended session's row, revealed and briefly lit up. */
-  revealSessionId?: string;
   /** Config status / playbook count, the foot's other tenant. */
   foot?: ReactNode;
 }
 
-type Life = "question" | "failure" | "running" | "ended-failed" | "ended" | "external-active" | "external-unknown";
+type Life = "question" | "failure" | "running" | "idle-failed" | "idle" | "history" | "external-active" | "external-unknown";
 
 /** Attention first, life second (run-view-73): the row says "answer
- * me" before it says "I am alive". */
+ * me" before it says "I am alive". The runtime is held only for a
+ * turn (DR-051), so running means a turn in flight and everything
+ * else is idle — or history, where the core cannot continue it. */
 function lifeOf(session: SessionInfo, item: AttentionItem | undefined): Life {
   if (session.externalWriter) return session.externalWriter === "active" ? "external-active" : "external-unknown";
   if (item?.kind === "question") return "question";
   if (item?.kind === "failure") return "failure";
   if (session.live) return "running";
-  return session.failed ? "ended-failed" : "ended";
+  if (isHistory(session)) return "history";
+  return session.failed ? "idle-failed" : "idle";
 }
 
 const LIFE_WORDS: Record<Life, string> = {
   question: "waiting for your reply",
   failure: "failed",
   running: "running",
-  "ended-failed": "ended, held a failure",
-  ended: "ended",
+  "idle-failed": "idle, held a failure",
+  idle: "idle",
+  history: "history, can't be continued",
   "external-active": "in use elsewhere",
   "external-unknown": "ownership unknown",
 };
 
-// A live failure summons (filled red); a failure a session ended
-// holding is history (hollow), and counts toward no badge.
+// A failure that summons is filled red; one the session's last turn
+// held that no longer summons is history (hollow), and counts toward
+// no badge.
 const LIFE_MARKS: Record<Life, string> = {
   question: "bg-amber-500",
   failure: "bg-red-500",
   running: "bg-emerald-500",
-  "ended-failed": "border-2 border-red-500",
-  ended: "border-2 border-neutral-500",
+  "idle-failed": "border-2 border-red-500",
+  idle: "border-2 border-neutral-500",
+  history: "border-2 border-neutral-300 dark:border-neutral-600",
   "external-active": "bg-emerald-500",
   "external-unknown": "border-2 border-neutral-500",
 };
@@ -147,10 +153,11 @@ export function NavRail(props: NavRailProps) {
     activeSessionId,
     expanded,
     onExpanded,
-    revealSessionId,
   } = props;
   const [showAll, setShowAll] = useState<Record<string, boolean>>({});
   const [focusKey, setFocusKey] = useState<string>();
+  // A delete confirm names an unsent draft it would take (DR-010 §4).
+  const drafts = useAppStore((state) => state.composers);
   // Deletion is destructive and irreversible, so it keeps one inline
   // confirmation at the row (DR-038, DR-010 §4).
   const [confirmDelete, setConfirmDelete] = useState<string>();
@@ -164,18 +171,20 @@ export function NavRail(props: NavRailProps) {
   const isExpanded = (projectId: string): boolean =>
     expanded[projectId] ?? projectId === currentProjectId;
 
+  // A working session first, then the rest by last activity
+  // (run-view-67): the recent window applies to the idle ones only.
   const byProject = useMemo(() => {
-    const map = new Map<string, { live: SessionInfo[]; ended: SessionInfo[] }>();
-    for (const project of projects) map.set(project.id, { live: [], ended: [] });
+    const map = new Map<string, { live: SessionInfo[]; idle: SessionInfo[] }>();
+    for (const project of projects) map.set(project.id, { live: [], idle: [] });
     for (const session of sessions) {
       const bucket = map.get(session.projectId);
       if (!bucket) continue;
       if (session.live || session.externalWriter) bucket.live.push(session);
-      else bucket.ended.push(session);
+      else bucket.idle.push(session);
     }
     for (const bucket of map.values()) {
       bucket.live.sort((a, b) => b.createdAt - a.createdAt);
-      bucket.ended.sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+      bucket.idle.sort((a, b) => (b.endedAt ?? b.createdAt) - (a.endedAt ?? a.createdAt));
     }
     return map;
   }, [projects, sessions]);
@@ -204,10 +213,10 @@ export function NavRail(props: NavRailProps) {
       activate: () => props.onPickProject(project.id),
     });
     if (!isExpanded(project.id)) continue;
-    const bucket = byProject.get(project.id) ?? { live: [], ended: [] };
+    const bucket = byProject.get(project.id) ?? { live: [], idle: [] };
     const ended = showAll[project.id]
-      ? bucket.ended
-      : bucket.ended.slice(0, RECENT_WINDOW);
+      ? bucket.idle
+      : bucket.idle.slice(0, RECENT_WINDOW);
     for (const session of [...bucket.live, ...ended]) {
       rows.push({
         key: `s:${session.id}`,
@@ -217,7 +226,7 @@ export function NavRail(props: NavRailProps) {
         activate: () => props.onActivateSession(session.id),
       });
     }
-    if (!showAll[project.id] && bucket.ended.length > RECENT_WINDOW) {
+    if (!showAll[project.id] && bucket.idle.length > RECENT_WINDOW) {
       rows.push({
         key: `m:${project.id}`,
         kind: "action",
@@ -444,12 +453,12 @@ export function NavRail(props: NavRailProps) {
       ) : null}
       {projects.map((project) => {
         const open = isExpanded(project.id);
-        const bucket = byProject.get(project.id) ?? { live: [], ended: [] };
+        const bucket = byProject.get(project.id) ?? { live: [], idle: [] };
         const worst = projectAttention.get(project.id);
         const listed = showAll[project.id]
-          ? bucket.ended
-          : bucket.ended.slice(0, RECENT_WINDOW);
-        const hidden = bucket.ended.length - listed.length;
+          ? bucket.idle
+          : bucket.idle.slice(0, RECENT_WINDOW);
+        const hidden = bucket.idle.length - listed.length;
         return (
           <div key={project.id} className="flex flex-col">
             <div
@@ -520,11 +529,7 @@ export function NavRail(props: NavRailProps) {
                       onClick={() => props.onActivateSession(session.id)}
                       aria-label={sessionLabel(session, life, now, item)}
                       title={sessionLabel(session, life, now, item)}
-                      className={`${rowClass(active)} group pl-6 ${
-                        revealSessionId === session.id
-                          ? "animate-pulse ring-2 ring-brand-300 dark:ring-brand-700"
-                          : ""
-                      }`}
+                      className={`${rowClass(active)} group pl-6`}
                     >
                       <span
                         aria-hidden
@@ -541,9 +546,12 @@ export function NavRail(props: NavRailProps) {
                         >
                           <InlineConfirm
                             question={
-                              session.foreign
+                              (session.foreign
                                 ? "Delete this session? It was run from the terminal; its history goes too."
-                                : "Delete this session and its transcript?"
+                                : "Delete this session and its transcript?") +
+                              (drafts[session.id]?.draft?.trim()
+                                ? " Its unsent draft goes with it."
+                                : "")
                             }
                             confirmLabel="Delete"
                             cancelLabel="Keep"
@@ -626,10 +634,10 @@ export function NavRail(props: NavRailProps) {
                         [project.id]: true,
                       }))
                     }
-                    aria-label={`Show all ${bucket.ended.length} sessions in ${project.name}`}
+                    aria-label={`Show all ${bucket.idle.length} sessions in ${project.name}`}
                     className={`${rowClass(false)} pl-6 text-xs text-brand-600 dark:text-brand-300`}
                   >
-                    all {bucket.ended.length}…
+                    all {bucket.idle.length}…
                   </div>
                 ) : null}
                 <div

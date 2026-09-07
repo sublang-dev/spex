@@ -546,8 +546,8 @@ describe("RUN-40: abort acknowledges instantly", () => {
   });
 });
 
-describe("RUN-36: ended sessions render read-only", () => {
-  test("readOnly hides the composer and shows the ended notice", () => {
+describe("RUN-36: history the core cannot continue renders read-only", () => {
+  test("readOnly hides the composer and shows the history notice", () => {
     const view = applyRecords(
       initialSessionView(PLAYERS),
       TURN_ONE,
@@ -566,8 +566,11 @@ describe("RUN-36: ended sessions render read-only", () => {
         onDismissError={() => {}}
       />,
     );
-    expect(screen.getByTestId("ended-notice").textContent).toContain(
+    expect(screen.getByTestId("history-notice").textContent).toContain(
       "can't be continued",
+    );
+    expect(screen.getByTestId("session-last-active").textContent).toContain(
+      "Last active",
     );
     expect(screen.queryByTestId("boss-composer")).toBeNull();
     // The control is within the label budget (DR-041), its sentence
@@ -575,12 +578,12 @@ describe("RUN-36: ended sessions render read-only", () => {
     const fresh = screen.getByRole("button", { name: "New session" });
     expect(fresh.title).toBe("Start a new session in this project");
     // The notice wraps its control under its words in a narrow pane.
-    expect(screen.getByTestId("ended-notice").className).toContain("flex-wrap");
+    expect(screen.getByTestId("history-notice").className).toContain("flex-wrap");
   });
 
-  // run-view-33 (DR-042): a continuable session is a paused
-  // conversation — the notice says so above the enabled composer.
-  test("a continuable session keeps its composer under the notice", () => {
+  // run-view-33 (DR-051): an idle continuable session is an ordinary
+  // conversation — no notice, nothing named ended, the composer ready.
+  test("a continuable session shows its composer and no notice", () => {
     const view = applyRecords(initialSessionView(PLAYERS), TURN_ONE);
     render(
       <RunView
@@ -595,43 +598,13 @@ describe("RUN-36: ended sessions render read-only", () => {
         onDismissError={() => {}}
       />,
     );
-    expect(screen.getByTestId("ended-notice").textContent).toContain(
-      "Ended · a message continues it",
-    );
-    expect(screen.getByRole("button", { name: "New session" })).toBeTruthy();
-    expect(screen.getByTestId("session-ended-at")).toBeTruthy();
+    expect(screen.queryByTestId("history-notice")).toBeNull();
+    expect(screen.queryByRole("button", { name: "New session" })).toBeNull();
+    expect(screen.queryByTestId("session-last-active")).toBeNull();
+    expect(screen.queryByTestId("end-session")).toBeNull();
     const box = screen.getByTestId("boss-composer") as HTMLTextAreaElement;
     expect(box.disabled).toBe(false);
     expect(box.placeholder).toBe("Message the Captain…");
-  });
-});
-
-// run-view-47 (DR-042): ending pauses the conversation, and the
-// confirm says a message can continue it.
-describe("run-view-47: the End confirm says the session can continue", () => {
-  test("the question names continuation and the queued messages", () => {
-    const view = applyRecords(initialSessionView(PLAYERS), TURN_ONLY_STARTED);
-    render(
-      <RunView
-        session={SESSION}
-        view={view}
-        composer={{ queued: [{ text: "later" }, { text: "and later" }] }}
-        connected
-        onEnd={() => {}}
-        onSubmit={async () => {}}
-        onAbort={() => {}}
-        onRemoveQueued={() => {}}
-        onDismissError={() => {}}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("end-session"));
-    const keep = screen.getByRole("button", { name: "Keep" });
-    expect(keep.parentElement?.textContent).toContain(
-      "End this session? A message can continue it later. 2 queued messages will be discarded.",
-    );
-    expect(screen.getByRole("button", { name: "End" })).toBeTruthy();
-    // The confirm wraps its controls under the question (DR-041).
-    expect(keep.parentElement?.className).toContain("flex-wrap");
   });
 });
 
@@ -1459,7 +1432,7 @@ describe("run-view-94/87: the delivery card and confirm-pulls-next", () => {
     );
   });
 
-  test("an ended session's replay renders the card inert", () => {
+  test("a history session's replay renders the card inert", () => {
     renderRunWith(TURN_ONE, {
       session: { ...SESSION, live: false, endedAt: 5 },
       readOnly: true,
@@ -1475,7 +1448,7 @@ describe("run-view-94/87: the delivery card and confirm-pulls-next", () => {
       (within(card).getByTestId("delivery-drop") as HTMLButtonElement)
         .disabled,
     ).toBe(true);
-    // And an ended lane shows no working line.
+    // And a read-only lane shows no working line.
     expect(screen.queryByTestId("working-line")).toBeNull();
   });
 });
@@ -1913,14 +1886,6 @@ describe("run-view-50: focus is never stranded", () => {
     expect(document.activeElement).toBe(screen.getByTestId("boss-composer"));
   });
 
-  test("backing out of the end confirm returns to its control", () => {
-    renderRunWith(TURN_ONE, { onEnd: () => {} });
-    fireEvent.click(screen.getByTestId("end-session"));
-    const keep = screen.getByRole("button", { name: "Keep" });
-    expect(document.activeElement).toBe(keep);
-    fireEvent.click(keep);
-    expect(document.activeElement).toBe(screen.getByTestId("end-session"));
-  });
 });
 
 describe("run-view-7: a roster with no players", () => {
@@ -2111,15 +2076,15 @@ describe("run-view-110: explicit uncertain-turn recovery", () => {
     const view = applyRecords(initialSessionView(PLAYERS), TURN_ONE);
     const composer = { draft: "Keep draft", queued: [{text: "Keep queue"}] };
     const props = {session, view, composer, connected: true, readOnly: false,
-      onSubmit: vi.fn(async () => {}), onRecover: vi.fn(async () => {}), onEnd: vi.fn(),
+      onSubmit: vi.fn(async () => {}), onRecover: vi.fn(async () => {}),
       onStartNew: vi.fn(), onAbort: vi.fn(), onRemoveQueued: vi.fn(), onDismissError: vi.fn()};
     const rendered = render(<RunView {...props} />);
     expect(screen.getByTestId("session-external-owner").textContent).toContain(externalWriter === "active" ? "in use elsewhere" : "ownership is unknown");
-    expect(screen.queryByTestId("session-ended-at")).toBeNull();
-    expect(screen.queryByTestId("ended-notice")).toBeNull();
+    expect(screen.queryByTestId("session-last-active")).toBeNull();
+    expect(screen.queryByTestId("history-notice")).toBeNull();
     expect(screen.queryByText("Interrupted turn")).toBeNull();
     expect(screen.queryByTestId("boss-composer")).toBeNull();
-    for (const name of ["Retry", "Discard", "End session", "New session"]) {
+    for (const name of ["Retry", "Discard", "New session"]) {
       expect(screen.queryByRole("button", {name})).toBeNull();
     }
     applyRecords(view, [{seq: view.lastSeq + 1, record: {type: "captain_reply", timestamp: 100, turnId: 1, text: "New external output"} as TmuxPlayRecord}]);
@@ -2142,7 +2107,6 @@ describe("run-view-110: explicit uncertain-turn recovery", () => {
       await expect(useAppStore.getState().submitBossText("s1", "New request")).rejects.toThrow("ownership");
       await expect(useAppStore.getState().recoverSession("s1", "retry")).rejects.toThrow("ownership");
       await expect(useAppStore.getState().recoverSession("s1", "discard")).rejects.toThrow("ownership");
-      await expect(useAppStore.getState().disposeSession("s1")).rejects.toThrow("ownership");
       await expect(useAppStore.getState().deleteSession("s1")).rejects.toThrow("ownership");
       expect(command).not.toHaveBeenCalled();
       expect(useAppStore.getState().composers.s1).toEqual(composer);
@@ -2150,20 +2114,6 @@ describe("run-view-110: explicit uncertain-turn recovery", () => {
       deliverServerMessageForTests({type: "session.state", session: {...SESSION, live: false}});
       expect(command).not.toHaveBeenCalled();
       expect(useAppStore.getState().composers.s1).toEqual(composer);
-    } finally {setClientForTests(undefined); useAppStore.setState(previous, true);}
-  });
-
-  test("confirmed disposal clears input only after the command succeeds", async () => {
-    const previous = useAppStore.getState();
-    const command = vi.fn().mockRejectedValueOnce(new Error("cleanup failed")).mockResolvedValueOnce(null);
-    setClientForTests({command} as never);
-    const composer = {draft: "Keep draft", queued: [{text: "Keep queue"}]};
-    useAppStore.setState({sessions: [SESSION], composers: {s1: composer}});
-    try {
-      await expect(useAppStore.getState().disposeSession("s1")).rejects.toThrow("cleanup failed");
-      expect(useAppStore.getState().composers.s1).toEqual(composer);
-      await useAppStore.getState().disposeSession("s1");
-      expect(useAppStore.getState().composers.s1).toEqual({draft: "", queued: []});
     } finally {setClientForTests(undefined); useAppStore.setState(previous, true);}
   });
 

@@ -14,6 +14,36 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
+### Changed
+
+- **Nothing ends.** The runtime is held only for a turn: a session's
+  agents and its Playbook lease are released when a turn settles and
+  taken up again by the next message, so there is no End control, no
+  "ended" state, and the terminal can continue any Spex conversation
+  between turns. A session reads working, waiting on you, idle, or
+  history the core cannot continue; the sidebar orders sessions by
+  last activity; the Now band and Start on an intent follow the
+  project's current conversation.
+- **Settings apply on the next message.** Every message opens the
+  runtime on the settings the file holds, projected onto the session's
+  own playbooks and players — enabling another playbook no longer
+  invalidates a conversation. Model, effort, and fast-mode changes apply
+  on the next call; a structural change (adapter, permissions, roster,
+  bindings) is refused naming the fields that changed and offering a new
+  session.
+- A message to a project whose other session is mid-turn is refused
+  naming that session; delete, rebind, and remove wait only on a turn in
+  flight.
+- Settings presents the Captain as a row of the players' shape: its
+  chip opens the shared agent editor with Save and Cancel, one row's
+  editor open at a time.
+
+### Fixed
+
+- Removing an Up next intent with the pointer no longer leaves the Undo
+  line standing until the next click: only a keyboard removal hands
+  focus to Undo, so the line lapses on schedule.
+
 ## [0.5.0] - 2026-09-06
 
 ### Added

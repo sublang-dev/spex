@@ -6,7 +6,7 @@
 // adapter — no network, no agent credentials (CORE-18).
 
 import { test } from "node:test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -480,10 +480,18 @@ test("CORE-22: records, order, and usage survive a service restart", async () =>
   await client.waitFor(
     (m) => m.type === "record" && m.record.type === "turn_finished",
   );
+  // The runtime is held only for a turn (core-service-91): settlement
+  // releases it, the Captain's disposal trace reaching the session
+  // channel outside any turn, and the session lists as no longer live.
   await client.waitFor(
     (m) => m.type === "session.state" && m.session.id === session.id &&
-      m.session.turns === 1 && m.session.turnActive === false,
+      m.session.turns === 1 && m.session.live === false,
   );
+  assert.ok(client.records("session").some(({ record }) =>
+    record.type === "captain_telemetry" && record.topic === "playbook.trace" &&
+    (record.payload as { type?: string }).type === "session.disposed" &&
+    (record as { turnId?: number | null }).turnId === null,
+  ), "release delivers the Captain's disposal trace to the session channel");
 
   const before = await client.expectOk("history.get", {
     sessionId: session.id,
@@ -491,17 +499,8 @@ test("CORE-22: records, order, and usage survive a service restart", async () =>
   const usageBefore = await client.expectOk("usage.get", {
     sessionId: session.id,
   });
-  const shutdownRecords: StoredRecord[] = [];
-  harness.service.events.onRecord = ({ seq, record, role, hidden }) => {
-    if (!hidden) shutdownRecords.push({ seq, record, ...(role === undefined ? {} : { role }) });
-  };
   client.close();
-  // Stop WITHOUT disposing gracefully first: session is live at shutdown.
   await harness.service.stop();
-  assert.ok(shutdownRecords.some(({ record }) =>
-    record.type === "captain_telemetry" && record.topic === "playbook.trace" &&
-    (record.payload as { type?: string }).type === "session.disposed",
-  ), "shutdown delivers the Captain's disposal trace before closing");
 
   const restarted = await CoreService.start({
     token: "test",
@@ -517,14 +516,14 @@ test("CORE-22: records, order, and usage survive a service restart", async () =>
   const sessions = await client2.expectOk("session.list", {});
   const recovered = sessions.find((s: SessionInfo) => s.id === session.id);
   assert.ok(recovered, "session survives restart");
-  assert.equal(recovered.live, false, "live-at-shutdown reported not live");
+  assert.equal(recovered.live, false, "a released session stays not live across restart");
 
   const after = await client2.expectOk("history.get", {
     sessionId: session.id,
   });
   // Content and order, whole (core-service-22): payloads, roles, and
   // timestamps replay byte-identical, not just seq and type.
-  assert.deepEqual(after.records, [...before.records, ...shutdownRecords]);
+  assert.deepEqual(after.records, before.records);
   assert.deepEqual(
     await client2.expectOk("usage.get", { sessionId: session.id }),
     usageBefore,
@@ -1928,21 +1927,23 @@ test("core-service-77: a real session continues after restart and respects anoth
   const project = await client.expectOk("project.register", {path:harness.projectDir});
   const session = await client.expectOk("session.create", {projectId:project.id});
   await client.expectOk("turn.submit", {sessionId:session.id,text:"first"});
-  await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && !m.session.turnActive && m.session.turns === 1);
-  await client.expectOk("session.dispose", {sessionId:session.id});
+  // Settlement releases the runtime (core-service-91).
+  await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && !m.session.live && m.session.turns === 1);
   const stream = join(harness.dataDir,"sessions",`${session.id}.records.jsonl`);
   const before = readFileSync(stream,"utf8");
   client.close(); await service.stop();
   service = await CoreService.start({token:"test",configPath:join(harness.dir,"playbook.config.yaml"),dataDir:harness.dataDir,adapterImports:fakeAdapterImports({fallback:{result:"continued answer"}}).imports,env:{},watchConfig:false});
   client = new Client(service.port()); await client.open();
   assert.equal((await client.expectOk("session.list",{})).find((item) => item.id === session.id)?.continuable,true);
+  // A freshly created session holds its runtime until its first turn
+  // settles, so the project refuses a message elsewhere, naming it.
   const other = await client.expectOk("session.create",{projectId:project.id});
   const busy = await client.command("turn.submit",{sessionId:session.id,text:"second"});
   assert.ok(!busy.ok && busy.error.code === "busy");
+  assert.ok(!busy.ok && /still working|a session/.test(busy.error.message), busy.ok ? "" : busy.error.message);
   await client.expectOk("session.dispose",{sessionId:other.id});
   await client.expectOk("turn.submit",{sessionId:session.id,text:"second"});
-  await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && !m.session.turnActive && m.session.turns === 2);
-  await client.expectOk("session.dispose",{sessionId:session.id});
+  await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && !m.session.live && m.session.turns === 2);
   assert.deepEqual(turnIds((await client.expectOk("history.get",{sessionId:session.id})).records),[1,2]);
   assert.ok(readFileSync(stream,"utf8").startsWith(before),"continue appends to the same replay");
 });
@@ -2004,10 +2005,20 @@ test("core-service-77: the real shell continues from its token-free snapshot, le
   assert.equal(snapshot.captain.conversation.kind, "needsSeeding");
   const ledgerBefore = JSON.stringify(snapshot.effectLedger);
 
-  await client.expectOk("session.dispose", { sessionId: session.id });
-  // The message restores the snapshot into a fresh shell and a new
-  // runtime, seeded with the ledger (core-service-73, core-service-74):
-  // the Captain reseeds and replies again.
+  // Settlement released the runtime (core-service-91): the session is
+  // no longer live, and the provider hints written at settlement stay
+  // bound to the untouched manifest.
+  await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && m.session.live === false);
+  const hints = JSON.parse(readFileSync(join(dir, "state", "sessions", `${session.id}.hints.json`), "utf8")) as { checkpointSha256: string; captain?: { kind: string } };
+  assert.equal(hints.checkpointSha256, createHash("sha256").update(readFileSync(manifest)).digest("hex"), "hints bound to the settled manifest");
+  assert.equal(hints.captain?.kind, "pinned");
+
+  // A tuning change lands on the next message (core-service-92): the
+  // message restores the snapshot into a fresh shell and a new runtime,
+  // seeded with the ledger (core-service-73, core-service-74) — the
+  // Captain replies again on the new model.
+  writeFileSync(configPath, VALID_CONFIG.replace("  model: claude-test\nplayers:", "  model: claude-tuned\nplayers:"));
+  await service.reloadConfig();
   await client.expectOk("turn.submit", { sessionId: session.id, text: "hello again" });
   await client.waitFor(
     (m) => m.type === "record" && m.record.type === "turn_finished" && m.record.turnId === 2,
@@ -2020,16 +2031,32 @@ test("core-service-77: the real shell continues from its token-free snapshot, le
   };
   assert.equal(JSON.stringify(after.snapshot.effectLedger), ledgerBefore, "ledger intact");
   assert.equal(after.snapshot.sequences.turn, 2, "the shell counted both turns");
-  await client.expectOk("session.dispose", { sessionId: session.id });
+  assert.ok(JSON.stringify((after as unknown as { lastAppliedExecutionProjection: { captain: unknown } }).lastAppliedExecutionProjection.captain).includes("claude-tuned"), "the new model was applied");
+  await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && m.session.turns === 2 && m.session.live === false);
 
-  // Config drift: the roster changed since, so the shell refuses the
-  // snapshot; the refusal names it and offers a new session, which
-  // the project then accepts (core-service-73).
+  // An unrelated addition changes nothing (core-service-92): a second
+  // playbook with its own player enters the config, the session keeps
+  // its stored members, and a third message continues it.
+  writeFileSync(configPath, VALID_CONFIG
+    .replace("  model: claude-test\nplayers:", "  model: claude-tuned\nplayers:")
+    .replace("    model: claude-test\nplaybooks:", "    model: claude-test\n  dev.reviewer:\n    adapter: claude\n    model: claude-test\nplaybooks:")
+    + "  review:\n    from: \"@sublang/playbook/review/registry\"\n    roles:\n      coder: dev.coder\n      reviewer: dev.reviewer\n");
+  await service.reloadConfig();
+  await client.expectOk("turn.submit", { sessionId: session.id, text: "and again" });
+  await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && m.session.turns === 3 && m.session.live === false);
+  const narrowed = JSON.parse(readFileSync(manifest, "utf8")) as { structuralProjection: { catalog: Record<string, unknown>; players: { id: string }[] } };
+  assert.deepEqual(Object.keys(narrowed.structuralProjection.catalog), ["code"], "the stored catalog is the session's own");
+  assert.deepEqual(narrowed.structuralProjection.players.map((player) => player.id), ["dev.coder"]);
+
+  // Structural drift: the roster changed since, so the refusal names the
+  // change and offers a new session, which the project then accepts
+  // (core-service-73, core-service-92).
   writeFileSync(configPath, VALID_CONFIG.replace(/dev\.coder/g, "dev.other"));
   await service.reloadConfig();
   const drift = await client.command("turn.submit", { sessionId: session.id, text: "once more" });
   assert.ok(!drift.ok && drift.error.code === "invalid_config");
-  assert.ok(!drift.ok && /structur|config|player|catalog/i.test(drift.error.message));
+  assert.ok(!drift.ok && /dev\.coder/.test(drift.error.message), `names the change: ${!drift.ok ? drift.error.message : ""}`);
+  assert.ok(!drift.ok && /new session/.test(drift.error.message), "offers a new session");
   const stillEnded = (await client.expectOk("session.list", {})).find(
     (s: SessionInfo) => s.id === session.id,
   );
@@ -2260,8 +2287,9 @@ for (const action of ["retry", "discard"] as const) {
       assert.ok(stats.runs.some((run) => run.prompt.includes("saved CLI input")));
       assert.ok(stats.runs.every((run) => !run.prompt.includes("replacement input")));
       assert.ok(!JSON.stringify(manifest).includes("fake-resume-"));
-      await client.expectOk("session.dispose", {sessionId});
-      // The same CLI facade can reopen the desktop settlement.
+      // Settlement released the runtime (core-service-91); the same CLI
+      // facade can reopen the desktop settlement at once.
+      await client.waitFor((m) => m.type === "session.state" && m.session.id === sessionId && m.session.live === false);
       const reopened = await openSessionHost({store:shared,sessionId,mode:"continue",cwd:projectPath,config,adapterImports:imports});
       await reopened.handleBossTurn("continued in CLI");
       assert.equal((await reopened.read())?.state, "settled");

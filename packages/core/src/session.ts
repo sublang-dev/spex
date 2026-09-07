@@ -4,9 +4,17 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { createTmuxPlayRuntime, type Captain, type PlayerAdapterImports } from "@sublang/cligent/tmux-play";
 import { openSessionHost, discardSessionUncertain, type SessionHostController } from "@sublang/playbook/session-host";
-import { validateCaptainSessionExecutionProjection, type SessionExecutionProjection, type ReplayStreamEntry } from "@sublang/playbook/session-store";
+import {
+  assertCaptainSessionExecutionCompatible,
+  projectCaptainSessionStructure,
+  validateCaptainSessionExecutionProjection,
+  type SessionExecutionProjection,
+  type SessionStructuralProjection,
+  type ReplayStreamEntry,
+} from "@sublang/playbook/session-store";
 import { resolveArtifacts } from "./artifacts.js";
 import type { ComposedConfig, LoadModule } from "./config.js";
 import type { ProjectInfo, SessionInfo, TmuxPlayRecord } from "./protocol.js";
@@ -19,8 +27,10 @@ export class CoreError extends Error {
   }
 }
 
-/** Deterministic record fixtures; production uses Playbook's Captain shell. */
-export type CaptainFactory = (composed: ComposedConfig) => Promise<Captain>;
+/** Deterministic record fixtures; production uses Playbook's Captain
+ * shell. The session id lets a fixture keep state across the runtime
+ * releases the turn-held lifecycle makes (core-service-91). */
+export type CaptainFactory = (composed: ComposedConfig, sessionId: string) => Promise<Captain>;
 export interface SessionManagerOptions {
   store: Store;
   loadModule?: LoadModule;
@@ -44,15 +54,54 @@ interface LiveSession {
   turnActive: boolean;
   pendingIntentId?: string;
   operation?: Promise<void>;
+  /** The turn's settlement, releasing the runtime (core-service-91):
+   * a submission arriving meanwhile waits for it rather than reaching
+   * a closing host. */
+  releasing?: Promise<void>;
 }
 
-/** Construct the shared execution projection from the validated desktop config. */
-function executionConfig(composed: ComposedConfig, cwd: string): SessionExecutionProjection {
+/** The members a stored structure names: its playbooks, and its
+ * referenced players in stored order (core-service-92). */
+interface StoredMembers { playbookIds: string[]; playerIds: string[] }
+
+function storedMembers(structure: SessionStructuralProjection): StoredMembers {
+  return {
+    playbookIds: Object.keys(structure.catalog),
+    playerIds: structure.players.map((player) => String((player as {id: unknown}).id)),
+  };
+}
+
+/** A drift the projection itself cannot express — a stored member the
+ * current config no longer holds (core-service-92). */
+export class SettingsDriftError extends Error {
+  constructor(readonly changes: string[]) {
+    super(`Settings changed since this session started: ${changes.join("; ")}. Start a new session for the new settings, or change them back.`);
+    this.name = "SettingsDriftError";
+  }
+}
+
+/** Construct the shared execution projection from the validated desktop
+ * config — the whole enabled catalog for a new session, or the current
+ * config projected onto a stored session's members so an unrelated
+ * playbook or player never invalidates it (core-service-92, DR-051). */
+function executionConfig(composed: ComposedConfig, cwd: string, members?: StoredMembers): SessionExecutionProjection {
+  const playbooks = members
+    ? members.playbookIds.map((id) => composed.playbooks.find((playbook) => playbook.id === id))
+    : composed.playbooks;
+  const missingPlaybooks = members ? members.playbookIds.filter((id, index) => !playbooks[index]) : [];
+  const playerIds = members ? members.playerIds : composed.players.map(({id}) => id);
+  const missingPlayers = playerIds.filter((id) => !composed.captainOptions.sessionAgents.players[id]);
+  if (missingPlaybooks.length || missingPlayers.length) {
+    throw new SettingsDriftError([
+      ...missingPlaybooks.map((id) => `playbook ${id} is no longer enabled`),
+      ...missingPlayers.map((id) => `player ${id} is no longer bound by the session's playbooks`),
+    ]);
+  }
   return validateCaptainSessionExecutionProjection({
     schemaVersion: 2,
     captain: composed.captainOptions.sessionAgents.captain,
-    players: composed.players.map(({id}) => ({ id, ...composed.captainOptions.sessionAgents.players[id] })),
-    catalog: Object.fromEntries(composed.playbooks.map((playbook) => {
+    players: playerIds.map((id) => ({ id, ...composed.captainOptions.sessionAgents.players[id] })),
+    catalog: Object.fromEntries((playbooks as ComposedConfig["playbooks"]).map((playbook) => {
       const block = composed.captainOptions.playbooks[playbook.id];
       return [playbook.id, {
         id: playbook.id, from: isAbsolute(playbook.from) ? pathToFileURL(playbook.from).href : playbook.from,
@@ -66,6 +115,59 @@ function executionConfig(composed: ComposedConfig, cwd: string): SessionExecutio
       }];
     })),
   });
+}
+
+/** Name every structural field whose change makes the current projection
+ * incompatible with the stored one — Playbook's own refusal names none
+ * (core-service-92). */
+export function describeStructuralDrift(stored: SessionStructuralProjection, current: SessionStructuralProjection): string[] {
+  const changes: string[] = [];
+  const agentDrift = (who: string, before: Record<string, unknown>, after: Record<string, unknown>): void => {
+    for (const field of ["adapter", "instruction", "permissions"]) {
+      if (!isDeepStrictEqual(before[field], after[field])) changes.push(`${who}'s ${field} changed`);
+    }
+  };
+  agentDrift("the Captain", stored.captain, current.captain);
+  const currentPlayers = current.players.map((player) => player as Record<string, unknown>);
+  stored.players.forEach((entry, index) => {
+    const before = entry as Record<string, unknown>;
+    const after = currentPlayers.find((player) => player.id === before.id);
+    if (!after) changes.push(`player ${String(before.id)} is gone`);
+    else {
+      agentDrift(`player ${String(before.id)}`, before, after);
+      if (currentPlayers[index]?.id !== before.id) changes.push(`player ${String(before.id)} changed its place in the roster`);
+    }
+  });
+  for (const player of currentPlayers) {
+    if (!stored.players.some((entry) => (entry as {id: unknown}).id === player.id)) changes.push(`player ${String(player.id)} joined the roster`);
+  }
+  for (const [id, before] of Object.entries(stored.catalog as Record<string, Record<string, unknown>>)) {
+    const after = (current.catalog as Record<string, Record<string, unknown>>)[id];
+    if (!after) { changes.push(`playbook ${id} is no longer enabled`); continue; }
+    for (const field of ["from", "manifestCommand", "command", "intent", "artifactSchema", "requiredRoleIds", "concurrentRoleSets", "options"]) {
+      if (!isDeepStrictEqual(before[field], after[field])) changes.push(`playbook ${id}'s ${field} changed`);
+    }
+    const beforeRoles = (before.roles ?? {}) as Record<string, {playerId?: unknown}>;
+    const afterRoles = (after.roles ?? {}) as Record<string, {playerId?: unknown}>;
+    for (const [role, binding] of Object.entries(beforeRoles)) {
+      const now = afterRoles[role]?.playerId;
+      if (now !== binding.playerId) changes.push(`playbook ${id}'s ${role} role now binds ${String(now ?? "no one")} instead of ${String(binding.playerId)}`);
+    }
+  }
+  for (const id of Object.keys(current.catalog)) {
+    if (!(id in stored.catalog)) changes.push(`playbook ${id} joined the session`);
+  }
+  return changes.length ? changes : ["the session's structure no longer matches its stored one"];
+}
+
+/** A project's current conversation (core-service-93, DR-051): its live
+ * session, else the most recently active one that continues and no
+ * other host owns. */
+export function currentSession(sessions: SessionInfo[], projectId: string): SessionInfo | undefined {
+  const own = sessions.filter((session) => session.projectId === projectId);
+  return own.find((session) => session.live) ?? own
+    .filter((session) => session.continuable && !session.externalWriter)
+    .sort((a, b) => (b.endedAt ?? b.createdAt) - (a.endedAt ?? a.createdAt))[0];
 }
 
 export class SessionManager {
@@ -91,10 +193,29 @@ export class SessionManager {
       return {...session, ...(live ? {externalWriter:undefined} : {}), live: !!live || session.live, turnActive: live?.turnActive ?? (session.live ? session.turnActive ?? false : false)};
     });
   }
+  /** One lane per project: its current conversation (core-service-93). */
   listLanes(): { sessionId: string; projectId: string; turnActive: boolean }[] {
-    return this.listSessions().filter((session) => session.live).map((session) => ({sessionId:session.id, projectId:session.projectId, turnActive:session.turnActive ?? false}));
+    const sessions = this.listSessions();
+    const lanes: { sessionId: string; projectId: string; turnActive: boolean }[] = [];
+    for (const projectId of new Set(sessions.map((session) => session.projectId))) {
+      const current = currentSession(sessions, projectId);
+      if (current) lanes.push({sessionId: current.id, projectId, turnActive: current.turnActive ?? false});
+    }
+    return lanes;
   }
   getLive(sessionId: string): LiveSession | undefined { return this.live.get(sessionId); }
+  /** Wait out a settling turn's release, so a caller sees the session
+   * either held or released — never in between (core-service-91). */
+  async settled(sessionId: string): Promise<void> {
+    const entry = this.live.get(sessionId);
+    if (entry?.releasing) await entry.releasing;
+  }
+  /** Wait out every release in flight across a project's sessions. */
+  async projectSettled(projectId: string): Promise<void> {
+    for (const entry of this.live.values()) {
+      if (entry.info.projectId === projectId && entry.releasing) await entry.releasing;
+    }
+  }
 
   async createSession(project: ProjectInfo, composed: ComposedConfig): Promise<SessionInfo> {
     return this.open(project, composed, randomUUID(), "new");
@@ -122,24 +243,46 @@ export class SessionManager {
   }
 
   private async open(project: ProjectInfo, composed: ComposedConfig | undefined, sessionId: string, mode: "new" | "continue" | "retry"): Promise<SessionInfo> {
-    if (this.opening.has(project.id) || this.store.listSessions().some((session) => session.projectId === project.id && (session.live || session.externalWriter)) || this.recovering.has(sessionId)) {
-      throw new CoreError("busy", `end the active session in ${project.name} first`);
+    // One working turn per project (core-service-4, DR-051): only a
+    // session whose runtime is held — a turn in flight or settling — or
+    // one another host holds stands in the way, and it is named. A
+    // sibling mid-release is waited out first.
+    await this.projectSettled(project.id);
+    const holder = this.store.listSessions().find((session) => session.projectId === project.id && (session.live || session.externalWriter));
+    if (this.opening.has(project.id)) throw new CoreError("busy", `a session is starting in ${project.name} — wait a moment`);
+    if (holder) {
+      const name = holder.title ? `“${holder.title}”` : "a session";
+      throw new CoreError("busy", holder.externalWriter
+        ? `${name} is in use elsewhere in ${project.name}`
+        : `${name} is still working in ${project.name} — wait for it to finish, or abort it`);
     }
+    if (this.recovering.has(sessionId)) throw new CoreError("busy", "the session is recovering");
     this.opening.add(project.id);
     this.store.setLocalSession(sessionId, true);
     let entry: LiveSession | undefined;
     let controller: SessionHostController | undefined;
     try {
-      const config = composed ? executionConfig(composed, project.path) : undefined;
-      const graphs = composed ? await Promise.all(composed.playbooks.map(async (playbook) => ({
+      // A continued session takes the current config projected onto its
+      // stored members, and drift is named before the runtime opens —
+      // never after the provider hints are consumed (core-service-92).
+      const stored = composed && mode === "continue" ? await this.storedStructure(sessionId) : undefined;
+      const members = stored ? storedMembers(stored) : undefined;
+      const config = composed ? executionConfig(composed, project.path, members) : undefined;
+      if (stored && config) {
+        try { assertCaptainSessionExecutionCompatible(stored, config); }
+        catch { throw new SettingsDriftError(describeStructuralDrift(stored, projectCaptainSessionStructure(config))); }
+      }
+      const memberPlaybooks = composed ? composed.playbooks.filter((playbook) => !members || members.playbookIds.includes(playbook.id)) : [];
+      const graphs = composed ? await Promise.all(memberPlaybooks.map(async (playbook) => ({
         playbookId: playbook.id, graph: (await resolveArtifacts(playbook, this.options.env)).machine ?? null,
       }))) : undefined;
-      const fixture = composed && this.options.captainFactory ? await this.options.captainFactory(composed) : undefined;
+      const initialVisible = composed ? composed.initialVisible.filter((id) => !members || members.playerIds.includes(id)) : undefined;
+      const fixture = composed && this.options.captainFactory ? await this.options.captainFactory(composed, sessionId) : undefined;
       controller = await openSessionHost({
         store: this.store.sessionStore(), sessionId, mode, cwd: project.path,
         ...(config ? {config} : {}), loadModule: this.loadModule,
         ...(graphs ? {graphs} : {}),
-        ...(composed ? {initialVisible: composed.initialVisible} : {}),
+        ...(initialVisible ? {initialVisible} : {}),
         ...(this.options.adapterImports ? {adapterImports: this.options.adapterImports} : {}),
         // Tests may narrate records before the real shell turn. Only the
         // shell supplies the reply, journal and durable settlement.
@@ -175,8 +318,34 @@ export class SessionManager {
     } catch (error) {
       if (controller) await controller.dispose();
       this.store.setLocalSession(sessionId, false);
+      if (error instanceof SettingsDriftError) throw new CoreError("invalid_config", error.message);
       throw this.failure(error, mode === "new" ? "invalid_config" : "invalid_request");
     } finally { this.opening.delete(project.id); }
+  }
+
+  /** The stored structural projection of a schema-7 checkpoint, when it has one. */
+  private async storedStructure(sessionId: string): Promise<SessionStructuralProjection | undefined> {
+    try {
+      const manifest = await this.store.sessionStore().readManifest(sessionId) as {schemaVersion?: unknown; structuralProjection?: SessionStructuralProjection};
+      return manifest.schemaVersion === 7 ? manifest.structuralProjection : undefined;
+    } catch { return undefined; }
+  }
+
+  /** The runtime is held only for a turn (core-service-91): once the
+   * settled checkpoint can be continued from disk, release it — the
+   * Playbook lease with it — keeping the provider hints settlement wrote. */
+  private async releaseAtSettle(entry: LiveSession): Promise<void> {
+    const id = entry.info.id;
+    let recovery: {state?: string; unresolvedEffects?: readonly unknown[]} | undefined;
+    try { recovery = await entry.controller.read(); } catch { recovery = undefined; }
+    if (recovery?.state !== "settled" || (recovery.unresolvedEffects?.length ?? 0) > 0) return;
+    try {
+      await entry.controller.dispose();
+      this.live.delete(id);
+      this.store.setLocalSession(id, false);
+    } catch (error) {
+      console.error(`spex: runtime release failed; ownership retained: ${String(error)}`);
+    }
   }
 
   private record(sessionId: string, entry: ReplayStreamEntry, live?: LiveSession): void {
@@ -230,6 +399,10 @@ export class SessionManager {
         if (failed) {
           try { await entry.controller.dispose(); this.live.delete(entry.info.id); this.store.setLocalSession(entry.info.id, false); }
           catch (error) { console.error(`spex: session cleanup failed; ownership retained: ${String(error)}`); }
+        } else {
+          entry.releasing = this.releaseAtSettle(entry);
+          await entry.releasing;
+          entry.releasing = undefined;
         }
         await this.store.refreshSession(entry.info.id, this.live.has(entry.info.id));
         this.publish(entry.info.id);
@@ -248,6 +421,8 @@ export class SessionManager {
     const entry = this.requireLive(sessionId);
     if (entry.turnActive) entry.runtime.abortActiveTurn();
     await entry.operation;
+    // The turn's own settlement may have released the runtime already.
+    if (!this.live.has(sessionId)) return;
     await entry.controller.dispose();
     this.live.delete(sessionId);
     this.store.setLocalSession(sessionId, false);

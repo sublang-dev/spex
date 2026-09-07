@@ -55,14 +55,14 @@ critical path over the app's own socket: seeded config valid →
 Academy seeds and parses → session starts → a minimal `/code` turn
 dispatches → the coder emits text, thinking or tool activity (initialization
 alone does not count) →
-abort → ended session → clean teardown, with the ABI flipped and
+abort → released session → clean teardown, with the ABI flipped and
 restored by the driver (release-22).
 Needs a locally signed-in Claude adapter; budget ~5–8 minutes.
 Provider-side flakes may be retried or waived with the reason
 recorded beside the tag; app-side failures block.
 
 Add `SPEX_SMOKE_MANUAL=1` to enable the scratch profile's abort notification
-and keep the ended session open for inspection. Press Enter to finish;
+and keep the settled session open for inspection. Press Enter to finish;
 after five minutes the check fails and cleans up. No extra agent turn runs.
 
 ## 2. Manual pass — desktop app
@@ -78,8 +78,8 @@ isolated home; keep the originals untouched.
 | Palette (⌘P) → "Try the Academy example" | Project seeds, registers, and becomes current; repeat click reopens it without error |
 | Specs tab over Academy | The Packages branch renders its collection directories (the migrated corpus has no compositions, so no Compositions branch appears); filters and search work; an item with citations shows outbound citation rows, cited items show grouped inbound backlinks, and jumps land and flash |
 | Playbooks surface | `/code`, `/review`, and `/decide` pipelines show source, gears, and state machine; example card stages all four artifacts; prefill fills the compile form (roles pre-mapped) |
-| Live run (`npm run smoke:desktop`, optionally with the manual pause) | Native notification follows the scratch preferences; dock badge matches Dashboard attention. A cleanly ended standalone session leaves both counts at zero. |
-| Session history and Dashboard | The aborted turn remains readable; player panes show usage only if the provider reported it. Dashboard lists outstanding questions, permissions, failures or finished work awaiting review; an ended standalone session creates none. |
+| Live run (`npm run smoke:desktop`, optionally with the manual pause) | Native notification follows the scratch preferences; dock badge matches Dashboard attention. A cleanly settled standalone session leaves both counts at zero. |
+| Session history and Dashboard | The aborted turn remains readable; player panes show usage only if the provider reported it. Dashboard lists outstanding questions, permissions, failures or finished work awaiting review; a settled standalone session creates none. |
 | Upgrade copied desktop and CLI data | Both histories appear with saved participants and graphs; unsupported checkpoints have a reason and no Continue action. |
 | Retry and Discard an interrupted session | Recovery shows its result; discarded history has no active spinner or Abort, and the next message sends normally. |
 | CLI writer, then deletion | Desktop shows readable external history and any load error with Retry; after CLI exit, management becomes available and deletion removes the session. |

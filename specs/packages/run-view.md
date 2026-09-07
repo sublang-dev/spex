@@ -124,7 +124,8 @@ The Boss composer shall accept free text and `/`-prefixed command text, be the o
 - while no turn is active, a submission dispatches without queueing, the primary control reading "Send";
 - while a turn is active, a submission queues with a visible queued indicator until the queued submission is dispatched, the primary control reading "Send next" ([DR-041](../decisions/041-chrome-that-fits.md));
 - when the active turn settles, the queued submission dispatches; a refused submission preserves its queued text and draft with the error shown, and uncertainty holds the queue until explicit recovery [[run-view-110](#run-view-110)];
-- a reply or replayed turn-start record does not establish settlement or current activity; a non-live session has no active turn, including after recovery;
+- a reply or replayed turn-start record does not establish settlement or current activity; a non-live session has no active turn, including after recovery, and its queued submissions dispatch once its turn has settled — the runtime is held only for a turn [[core-service-91](core-service.md#core-service-91)];
+- while a submission is being sent — the runtime opening on the current settings [[core-service-92](core-service.md#core-service-92)], then the turn starting — the primary control reads "Sending…" and stays disabled ([DR-010](../decisions/010-interface-craft.md) §3), and a refusal lands in the composer's frame with the draft kept;
 - the primary control's tooltip names its keys — Enter sends, Shift+Enter adds a line — and, while a turn is active, opens by saying the message sends when this turn ends.
 
 #### run-view-106
@@ -230,16 +231,16 @@ When the user opens the captain identity's editor control (or another agent's ed
 
 #### run-view-33
 
-When an ended session is opened [[run-view-68](#run-view-68)], the run view shall show a loading note while its stored transcript loads and, once it is shown, an ended notice whose "New session" control starts a new session for the same project — nothing the user produced becomes unreachable ([DR-009](../decisions/009-at-hand-interaction.md)):
+When a session that is not live is opened [[run-view-68](#run-view-68)], the run view shall show a loading note while its stored transcript loads and, once it is shown, render it as a conversation a message continues, or — where the core lists it as history it cannot continue ([DR-042](../decisions/042-sessions-continue.md)) — a history notice carrying the core's reason and a "New session" control that starts a new session for the same project, in the composer's place — nothing the user produced becomes unreachable ([DR-009](../decisions/009-at-hand-interaction.md), [DR-051](../decisions/051-runtime-held-for-a-turn.md)):
 
 - an uncertain session shows recovery controls [[run-view-110](#run-view-110)];
-- for any other session the core lists as continuable ([DR-042](../decisions/042-sessions-continue.md)) the notice reads "Ended · a message continues it" above the enabled composer; otherwise it reads "Ended — this session can't be continued" in the composer's place;
+- a continuable session shows no notice at all: its composer is an ordinary composer, and nothing names it ended;
 - the notice wraps its control under its words when its pane is too narrow for both ([DR-041](../decisions/041-chrome-that-fits.md));
 - when the transcript fails to load, the run view says so and offers a retry that reloads it — a failed load never presents as an empty run.
 
 #### run-view-123
 
-When the core reconnects or reports replaced history [[core-service-87](core-service.md#core-service-87)], the run view shall reload affected cached conversations from sequence zero while retaining drafts and queued input.
+When the core reconnects or reports replaced history [[core-service-92](core-service.md#core-service-92)], the run view shall reload affected cached conversations from sequence zero while retaining drafts and queued input.
 
 #### run-view-110
 
@@ -278,7 +279,7 @@ A queued Boss submission shall never read as sent:
 
 #### run-view-39
 
-Composer drafts (per session and on the Captain home) shall survive switching tabs and surfaces, clearing only on send or when their session is ended by the user.
+Composer drafts (per session and on the Captain home) shall survive switching tabs and surfaces, clearing only on send ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 
 #### run-view-40
 
@@ -393,7 +394,7 @@ While the app is connected, the sidebar shall present navigation as surface entr
 - Dashboard stands first, then the Workspace section, then Playbooks and Settings;
 - each project node discloses its sessions on a control of its own, an axis independent of which project is current ([DR-027](../decisions/027-linked-views-contract.md)) — the current project starts disclosed, and thereafter the reader's arrangement stands;
 - activating a project row makes it the current project and changes no disclosure;
-- a disclosed project lists its live session, then its five most recent ended sessions by end time, with one control revealing the rest in place and one control opening that project's start tab — a project holds at most one live session [[core-service-4](core-service.md#core-service-4)], so starting one is a composer away, never a conflict away;
+- a disclosed project lists its sessions by last activity, a working one first, the five most recent shown with one control revealing the rest in place and one control opening that project's start tab — a project holds at most one turn in flight [[core-service-4](core-service.md#core-service-4)], so starting a session is a composer away, never a conflict away ([DR-051](../decisions/051-runtime-held-for-a-turn.md));
 - a project whose sessions need a human carries a dot in the most severe of their colors on its own row, disclosed or not [[run-view-73](#run-view-73)];
 - the section header carries the control that opens the project palette [[run-view-42](#run-view-42)], where projects are added and created;
 - the surface entries are a navigation list publishing the current surface, and the projects and their sessions are one tree publishing disclosure, selection, and a single focus stop;
@@ -404,29 +405,29 @@ While the app is connected, the sidebar shall present navigation as surface entr
 
 Each session row in the sidebar shall read as its conversation — its title (the first Boss turn, or a never-spoken marker), its age in the app's compact form with the exact moment in its tooltip, and a status mark — with its turn count and its age in words in the row's accessible description [[core-service-32](core-service.md#core-service-32)] ([DR-029](../decisions/029-session-history-home.md)):
 
-- the mark speaks attention first and life second, in the app's one status palette: amber while the session waits on the human, red while it holds an unacknowledged failure — the same derivation the Dashboard entry's count uses [[run-view-34](#run-view-34)] — then running, then ended;
-- a session that ended holding a failure wears a quieter historical mark that counts toward no attention signal;
+- the mark speaks attention first and life second, in the app's one status palette: amber while the session waits on the human, red while it holds an unacknowledged failure — the same derivation the Dashboard entry's count uses [[run-view-34](#run-view-34)] — then running while a turn is in flight, then idle ([DR-051](../decisions/051-runtime-held-for-a-turn.md));
+- an idle session whose last turn held a failure that no longer summons wears a quieter historical mark that counts toward no attention signal;
 - every mark's meaning is in the row's accessible description, so color is never the only channel;
 - the active session's row carries the app's interaction hue, the treatment the surface entries already use;
-- the row's own controls — the project's disclosure caret above it and every non-live session's delete control — are 24px targets, the delete control revealed on hover and on keyboard focus alike; a session the terminal wrote asks its inline confirm in those words, its history going too ([DR-042](../decisions/042-sessions-continue.md)).
+- the row's own controls — the project's disclosure caret above it and every non-live session's delete control — are 24px targets, the delete control revealed on hover and on keyboard focus alike; a session the terminal wrote asks its inline confirm in those words, its history going too ([DR-042](../decisions/042-sessions-continue.md)), and a session holding an unsent draft names the draft in its confirm ([DR-010](../decisions/010-interface-craft.md) §4).
 
 
 #### run-view-68
 
 When a session is activated in the sidebar, the workspace shall show that session's project and open the session as a tab, whatever project was current before ([DR-029](../decisions/029-session-history-home.md)):
 
-- a live session opens as its running tab, an ended one as its ended tab — a paused conversation a message continues, or read-only where it cannot ([DR-042](../decisions/042-sessions-continue.md));
+- a working session opens as its running tab, an idle one as a conversation a message continues, and history the core cannot continue as its read-only tab ([DR-042](../decisions/042-sessions-continue.md), [DR-051](../decisions/051-runtime-held-for-a-turn.md));
 - a session already open is focused rather than opened twice;
 - the project the switch made current is named where a new session would be dispatched [[run-view-25](#run-view-25)], so the target is never guessed;
-- the tab's close control files the session back to the sidebar without ending it [[run-view-47](#run-view-47)], where it stays reachable.
+- the tab's close control files the session back to the sidebar, stopping nothing [[run-view-48](#run-view-48)], where it stays reachable.
 
 
 #### run-view-69
 
-While a session's tab is shown, the run view shall render it live, ended, or read-only by the session's own state, never navigating on that change ([DR-029](../decisions/029-session-history-home.md)):
+While a session's tab is shown, the run view shall render it working, idle, or read-only by the session's own state, never navigating on that change ([DR-029](../decisions/029-session-history-home.md), [DR-051](../decisions/051-runtime-held-for-a-turn.md)):
 
-- ending the live session keeps its transcript on screen, transitioned to the ended notice [[run-view-33](#run-view-33)] — the composer staying for a continuable session and leaving otherwise — and marks it ended on its tab and on its sidebar row, which is revealed and briefly highlighted so the reader sees where the conversation landed;
-- a read-only session renders the identical fold of its stored records [[run-view-14](#run-view-14)], settled machine cards included [[run-view-62](#run-view-62)], headed by its title and ended time;
+- a turn settling keeps the transcript on screen with the composer ready for the next message, nothing on the tab or the sidebar row saying "ended" — the runtime's release is not the reader's business;
+- a read-only session renders the identical fold of its stored records [[run-view-14](#run-view-14)], settled machine cards included [[run-view-62](#run-view-62)], headed by its title and the time it was last active;
 - each open session keeps its own scroll position as tabs change.
 
 
@@ -475,21 +476,14 @@ While a slash menu is open, when Escape is pressed, the slash menu shall hide wi
 
 - The slash menu exposes listbox semantics (options with selection state reflected to assistive technology via the composer's active-descendant).
 
-#### run-view-47
-
-When the user ends a live session, the run view shall always use the inline confirm (safe default focused, Escape cancels) asking "End this session? A message can continue it later." with "End" and "Keep" ([DR-042](../decisions/042-sessions-continue.md)), naming the number of queued messages that would be discarded — the emergency abort control stays one-click:
-
-- ending is a named control of its own, never the tab's close control, which stops no agent ([DR-029](../decisions/029-session-history-home.md));
-- after a tab closes, focus moves to a neighboring tab, never to the document body.
-
 #### run-view-48
 
-The tab strip shall show the current project's open sessions, live and ended alike:
+The tab strip shall show the current project's open sessions, working and idle alike:
 
 - the strip holds the sessions the reader has opened — the working set, not the archive, which the sidebar keeps [[run-view-67](#run-view-67)];
 - session tabs are titled by the session's first Boss turn (truncated; "new session" before the first turn) with the full prompt and start time in the tooltip — never by the project name, which the sidebar carries ([DR-011](../decisions/011-project-workspace.md));
-- tabs carry the shared attention signal: an amber dot for a waiting question and a red dot for a failure on background tabs (the active tab shows the banner instead), with the detail in the tab tooltip and the tab's accessible name ending in "needs your reply" or "failed" so the dot is never the only channel, and an ended session's tab says so;
-- each tab's close control files the session out of the working set without ending it or confirming [[run-view-47](#run-view-47)];
+- tabs carry the shared attention signal: an amber dot for a waiting question and a red dot for a failure on background tabs (the active tab shows the banner instead), with the detail in the tab tooltip and the tab's accessible name ending in "needs your reply" or "failed" so the dot is never the only channel, and a tab of history the core cannot continue says "history" ([DR-051](../decisions/051-runtime-held-for-a-turn.md));
+- each tab's close control files the session out of the working set, stopping nothing and confirming nothing ([DR-029](../decisions/029-session-history-home.md)), and after a tab closes focus moves to a neighboring tab, never to the document body;
 - the strip scrolls horizontally when tabs overflow, keeps the new-session control — a plus glyph, its name in its accessible name and tooltip ([DR-041](../decisions/041-chrome-that-fits.md)) — reachable, exposes tab-list semantics, and keeps the active tab scrolled into view;
 - the strip has one Tab stop — the active tab — and Arrow Left, Arrow Right, Home, and End move focus between session tabs, the new-session control, and the pinned tabs without activating any;
 - a tab tooltip that names a shortcut prints it with the platform's own modifier (⌘ on a Mac, Ctrl elsewhere).
@@ -546,7 +540,7 @@ Each project shall keep its own working set — the sessions open as tabs and wh
 
 - a session activated again is focused rather than opened twice, and removing a project discards its working set with it;
 - when the user arrives via an attention affordance (a Dashboard row or a palette row with a needs-you signal), the workspace focuses the session that needs the human instead of the remembered tab;
-- a fresh launch opens the current project's live session if it has one and the start tab otherwise — the sidebar, not the working set, is what carries history across launches [[run-view-67](#run-view-67)];
+- a fresh launch opens the current project's working session if it has one and the start tab otherwise — the sidebar, not the working set, is what carries history across launches [[run-view-67](#run-view-67)];
 - a launch with no remembered project adopts one wherever the workspace holds any — a live session's project, else any registered one — so a workspace with projects never opens asking which.
 
 #### run-view-58
@@ -567,7 +561,7 @@ When the composer's add-to-Up-next action is activated, the Boss composer shall 
 
 #### run-view-86
 
-When Start is activated on a queued intent, the run view shall stage the intent's text into the project's composer, focused — the live session's, or the Captain home's where none is live — under a visible chip carrying the intent's title, and the chip governs what a send stamps ([DR-035](../decisions/035-intent-ledger.md)):
+When Start is activated on a queued intent, the run view shall stage the intent's text into the project's composer, focused — the current conversation's [[core-service-93](core-service.md#core-service-93)], or the Captain home's where the project has none — under a visible chip carrying the intent's title, and the chip governs what a send stamps ([DR-035](../decisions/035-intent-ledger.md), [DR-051](../decisions/051-runtime-held-for-a-turn.md)):
 
 - emptying the composer or dismissing the chip detaches the intent, and a send then stamps nothing — the intent simply stays queued;
 - sending with the chip attached passes the intent's id with the Boss submission [[core-service-5](core-service.md#core-service-5)];
@@ -619,8 +613,9 @@ While the working line names an open intent [[run-view-90](#run-view-90)], the r
 
 #### run-view-114
 
-While the next card names the queue's head [[run-view-88](#run-view-88)], the Captain home shall offer Remove beside Start, acting on the click with no confirmation and leaving no history ([DR-038](../decisions/038-history-is-done-work.md)), then a status line — "Removed “⟨title⟩” — Undo", taking focus and lasting six seconds beyond the last moment its control holds it — that re-queues the same text and provenance at the queue's head:
+While the next card names the queue's head [[run-view-88](#run-view-88)], the Captain home shall offer Remove beside Start, acting on the click with no confirmation and leaving no history ([DR-038](../decisions/038-history-is-done-work.md)), then a status line — "Removed “⟨title⟩” — Undo", lasting six seconds beyond the last moment its control holds focus, which it takes from a keyboard-driven removal alone — that re-queues the same text and provenance at the queue's head:
 
+- a pointer removal leaves the pointer where it is, so the line lapses on schedule and never stands as a prompt;
 - the card stays while the Undo line stands, even once no queued intent is left behind it, and a restored intent's Start takes focus.
 
 ## Internal Behavior
@@ -714,7 +709,7 @@ Where a fixture machine holds a neighbour edge, a same-rank pair, a rank-skippin
 
 #### run-view-70
 
-Where a fixture store holds two projects — the current one with a live titled session awaiting a Boss reply, more ended sessions than the recent window holds (one of them having held a failure), and a session with no turns; the other with a live session awaiting a reply and an ended session — the test suite shall assert the sidebar contract: Dashboard stands first carrying the attention count [[run-view-34](#run-view-34)], the current project's rows carry their titles, relative times, and attention-first marks with the turn counts in their accessible descriptions and the ended failure marked as history rather than attention [[run-view-73](#run-view-73)], and the other project's row carries its own attention signal [[run-view-67](#run-view-67)]; disclosing that project leaves the current project unchanged [[run-view-67](#run-view-67)]; activating its session shows that project and opens the session as a read-only tab, and activating it again focuses rather than duplicates [[run-view-68](#run-view-68)]; ending the live session keeps its transcript on screen read-only and reveals its now-ended row [[run-view-69](#run-view-69)]; closing that tab leaves the session listed and running nothing [[run-view-68](#run-view-68)]; the rest-revealing control lists the sessions the recent window omitted [[run-view-67](#run-view-67)]; and, with the Workspace showing the live session's tab, the current project's row and that session's row are selected, showing Playbooks leaves no row selected with its own entry current, and the Workspace selects the remembered project again [[run-view-67](#run-view-67)].
+Where a fixture store holds two projects — the current one with a titled session awaiting a Boss reply, more idle sessions than the recent window holds (one of them having held a failure), and a session with no turns; the other with a session awaiting a reply and an idle session — the test suite shall assert the sidebar contract: Dashboard stands first carrying the attention count [[run-view-34](#run-view-34)], the current project's rows carry their titles, relative times, and attention-first marks with the turn counts in their accessible descriptions and the settled failure marked as history rather than attention [[run-view-73](#run-view-73)], and the other project's row carries its own attention signal [[run-view-67](#run-view-67)]; disclosing that project leaves the current project unchanged [[run-view-67](#run-view-67)]; activating its session shows that project and opens the session as a read-only tab, and activating it again focuses rather than duplicates [[run-view-68](#run-view-68)]; a turn settling keeps its transcript on screen with the composer ready and no ended word on its tab or row [[run-view-69](#run-view-69)]; closing that tab leaves the session listed and running nothing [[run-view-68](#run-view-68)]; the rest-revealing control lists the sessions the recent window omitted [[run-view-67](#run-view-67)]; and, with the Workspace showing the waiting session's tab, the current project's row and that session's row are selected, showing Playbooks leaves no row selected with its own entry current, and the Workspace selects the remembered project again [[run-view-67](#run-view-67)].
 
 
 #### run-view-84
@@ -772,7 +767,7 @@ When the captain editor popover is opened from the Captain home with a fixture c
 
 #### run-view-36
 
-Where a fixture holds one ended session with a stored transcript and one live session awaiting a Boss reply, the test suite shall assert that opening the ended session shows a loading note and then its transcript with a start-a-new-session affordance, that a failed load offers a retry instead of an empty run [[run-view-33](#run-view-33)], and that the Dashboard navigation badge shows the count 1 [[run-view-34](#run-view-34)].
+Where a fixture holds one history-only session with a stored transcript and one session awaiting a Boss reply, the test suite shall assert that opening the history session shows a loading note and then its transcript with the history notice and a start-a-new-session affordance, that an idle continuable session shows its composer with no notice, that a failed load offers a retry instead of an empty run [[run-view-33](#run-view-33)], and that the Dashboard navigation badge shows the count 1 [[run-view-34](#run-view-34)].
 
 #### run-view-52
 
@@ -830,7 +825,7 @@ Where a replayed fixture stream dispatches a queued intent whose turn then ends 
 
 #### run-view-95
 
-Where a fixture project holds a queue whose unblocked head intent has more intents behind it, when the Captain home renders, the test suite shall assert the next card names the head intent with Start and counts the rest while the quick start card stands beside it [[run-view-88](#run-view-88)], and that activating Start stages the intent into the home composer under its chip [[run-view-88](#run-view-88)] [[run-view-86](#run-view-86)], and that Remove closes the head intent dropped on the click with the Undo line taking focus, the card standing on that line alone once no next is served, and Undo re-queuing the same text and provenance at the head with the restored intent's Start focused [[run-view-114](#run-view-114)].
+Where a fixture project holds a queue whose unblocked head intent has more intents behind it, when the Captain home renders, the test suite shall assert the next card names the head intent with Start and counts the rest while the quick start card stands beside it [[run-view-88](#run-view-88)], and that activating Start stages the intent into the home composer under its chip [[run-view-88](#run-view-88)] [[run-view-86](#run-view-86)], and that Remove closes the head intent dropped on the click — the Undo line taking focus from a keyboard activation and lapsing untouched after a pointer one — the card standing on that line alone once no next is served, and Undo re-queuing the same text and provenance at the head with the restored intent's Start focused [[run-view-114](#run-view-114)].
 
 #### run-view-96
 
@@ -872,7 +867,7 @@ Where the harness boots the served shell with the demo project registered and th
 - the Captain pane shows the run's status lines and a machine card for the code run with its review call nested [[run-view-1](#run-view-1)] [[run-view-60](#run-view-60)] [[run-view-63](#run-view-63)];
 - one pane per roster player stands, the coder's streaming text and collapsed tool cards, then its usage [[run-view-7](#run-view-7)] [[run-view-3](#run-view-3)] [[run-view-4](#run-view-4)] [[run-view-6](#run-view-6)];
 - a message sent during the turn reads queued, never sent, and goes out when the turn ends [[run-view-38](#run-view-38)];
-- ending the session asks the inline confirm, and the tab then renders read-only with the ended note [[run-view-47](#run-view-47)] [[run-view-69](#run-view-69)].
+- the turn settling leaves the composer ready with no end control and no ended word, the sidebar row reading idle [[run-view-69](#run-view-69)] [[run-view-73](#run-view-73)].
 
 #### run-view-99
 
@@ -904,7 +899,7 @@ Where the harness boots with the demo project registered, when the journey break
 
 #### run-view-104
 
-Where the live lane runs with the machine's signed-in agents ([DR-039](../decisions/039-browser-acceptance-journeys.md)), when the journey sends a minimal no-change `/code` task, the test suite shall assert through the page that a player pane shows the coder's live output, that the abort control acknowledges instantly and the turn ends aborted [[run-view-10](#run-view-10)] [[run-view-40](#run-view-40)], and that ending the session leaves the tab read-only [[run-view-47](#run-view-47)].
+Where the live lane runs with the machine's signed-in agents ([DR-039](../decisions/039-browser-acceptance-journeys.md)), when the journey sends a minimal no-change `/code` task, the test suite shall assert through the page that a player pane shows the coder's live output, that the abort control acknowledges instantly and the turn ends aborted [[run-view-10](#run-view-10)] [[run-view-40](#run-view-40)], and that the session then reads idle with its composer ready [[run-view-69](#run-view-69)].
 
 #### run-view-115
 
@@ -916,16 +911,16 @@ Where the harness boots with the demo project registered and the scripted Captai
 
 #### run-view-109
 
-Where the hermetic lane's demo shell has run a task to its end ([DR-039](../decisions/039-browser-acceptance-journeys.md)), the test suite shall assert through the page that ending the session leaves the composer in place reading as a paused conversation, that a message sent there continues the session on the same tab — the Captain narrating again, the end control back — and that after the shell restarts underneath the page the same tab continues once more [[run-view-68](#run-view-68)]; and, with a session the terminal wrote listed for the project, that its sidebar row's delete control and inline confirm — worded for the terminal's history — remove it from the listing and its record and stream from the shared session store [[run-view-73](#run-view-73)].
+Where the hermetic lane's demo shell has run a task to its end ([DR-039](../decisions/039-browser-acceptance-journeys.md)), the test suite shall assert through the page that the settled session's composer stands ready with no notice, that a message sent there — after a model change in Settings — continues the session on the same tab with the Captain narrating again and the coder's pane wearing the new model [[run-view-69](#run-view-69)] [[run-view-8](#run-view-8)], and that after the shell restarts underneath the page the same tab continues once more [[run-view-68](#run-view-68)]; and, with a session the terminal wrote listed for the project, that its sidebar row's delete control and inline confirm — worded for the terminal's history — remove it from the listing and its record and stream from the shared session store [[run-view-73](#run-view-73)].
 
 #### run-view-105
 
-Where the harness boots with the demo project registered and carrying closed work, the scripted Captain, and ten further projects each holding a live session parked on a player question, when the journey shows each surface — the Captain home, a session with a turn in flight, the Dashboard, the project's Overview, the Specs tab with the graph shown, Playbooks, and Settings — at the widths 320, 480, 640, 800, 1024, and 1280 pixels, each at 800 and 400 pixels tall, with the sidebar collapsed and, from 480 pixels, open ([DR-041](../decisions/041-chrome-that-fits.md): the open sidebar is 224 pixels wide), the test suite shall assert fit through the page, naming every offending element:
+Where the harness boots with the demo project registered and carrying closed work, the scripted Captain, and ten further projects each holding a session parked on a player question, when the journey shows each surface — the Captain home, a session with a turn in flight, the Dashboard, the project's Overview, the Specs tab with the graph shown, Playbooks, and Settings — at the widths 320, 480, 640, 800, 1024, and 1280 pixels, each at 800 and 400 pixels tall, with the sidebar collapsed and, from 480 pixels, open ([DR-041](../decisions/041-chrome-that-fits.md): the open sidebar is 224 pixels wide), the test suite shall assert fit through the page, naming every offending element:
 
 - the page never scrolls sideways, and no element outside a sideways-scrolling canvas is wider than its box [[run-view-106](#run-view-106)] [[run-view-107](#run-view-107)] [[run-view-48](#run-view-48)];
 - the page never scrolls vertically, no scrolling box ends past the bottom of the viewport, and no positioned element lies past it with no scrolling box containing it — at either height, and again after the window is made short and tall within one page life [[run-view-119](#run-view-119)];
 - within every tab list, toolbar, header, list row, and composer box, no two visible siblings overlap and every child lies inside its parent [[run-view-106](#run-view-106)] [[run-view-71](#run-view-71)];
-- every control's accessible name is the same at every width [[run-view-8](#run-view-8)] [[run-view-85](#run-view-85)] [[run-view-47](#run-view-47)];
+- every control's accessible name is the same at every width [[run-view-8](#run-view-8)] [[run-view-85](#run-view-85)] [[run-view-48](#run-view-48)];
 - the collapsed sidebar's Dashboard badge prints "9+" with the count in the entry's accessible name [[run-view-108](#run-view-108)];
 - the Captain home's agent popover, opened at each height, lies inside the window with its adapter picker reachable and the page unmoved [[run-view-32](#run-view-32)];
 - a composer standing behind six queued submissions keeps its frame a few entries tall and its primary control inside the window at every width and height [[run-view-106](#run-view-106)].

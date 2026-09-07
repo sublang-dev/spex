@@ -80,8 +80,11 @@ function foldConditions(records: StoredRecord[]): SessionConditions {
           if (trace.type === "fsm.transition") {
             if (trace.payload?.to === "awaitBossReply") parkedRuns.add(trace.sessionId);
             else if (trace.payload?.from === "awaitBossReply") parkedRuns.delete(trace.sessionId);
-          } else if (trace.type === "session.disposed" && parkedRuns.delete(trace.sessionId)) {
-            question = undefined;
+          } else if (trace.type === "session.disposed") {
+            // Outside a turn — no turn id — the host is releasing the
+            // runtime at settlement, a pause the parked run survives
+            // (core-service-93); inside one, the Captain dismissed it.
+            if (telemetry.turnId !== null && parkedRuns.delete(trace.sessionId)) question = undefined;
           }
           break;
         }

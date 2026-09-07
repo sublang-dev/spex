@@ -219,7 +219,7 @@ export function resolvePlayerId(
 
 /** Abort reasons are runtime plumbing; translate the known ones. */
 function friendlyAbortReason(reason: string): string {
-  if (reason === "runtime disposed") return "session ended";
+  if (reason === "runtime disposed") return "session shut down";
   return reason;
 }
 
@@ -562,6 +562,7 @@ export function applyRecord(
           r.payload,
           r.timestamp,
           view.settledRuns,
+          r.turnId,
         );
         const graphs = typeof r.contextSeq === "number" ? view.contexts[r.contextSeq] : undefined;
         const bind = (frame: MachineFrame): void => {

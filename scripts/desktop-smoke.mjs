@@ -248,7 +248,8 @@ try {
     60_000,
     "the aborted-turn record",
   );
-  // The abort record precedes cleanup, which may end the session.
+  // The abort record precedes cleanup, which releases the runtime; a
+  // session still held afterwards is detached explicitly.
   const stopped = await waitFor(
     () => {
       const state = sessions.get(session.id);
@@ -264,7 +265,7 @@ try {
       return state && !state.live && !state.turnActive;
     },
     60_000,
-    "the ended session",
+    "the released session",
   );
 
   if (manual) {
