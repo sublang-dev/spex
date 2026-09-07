@@ -182,7 +182,7 @@ function Stamp({ at }: { at: number }) {
       dateTime={new Date(at).toISOString()}
       title={absoluteTitle(at)}
       data-testid="message-time"
-      className="shrink-0 pb-1 text-xs tabular-nums text-neutral-400 dark:text-neutral-500"
+      className="shrink-0 pb-1 text-xs tabular-nums text-neutral-500 dark:text-neutral-400"
     >
       {clockTime(at)}
     </time>

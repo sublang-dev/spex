@@ -9,7 +9,7 @@ import type { SessionInfo } from "@sublang/spex-core/protocol";
 
 import type { PlayerView, TranscriptSegment, UsageView } from "../state/reducer.js";
 import { useStickToBottom, jumpPillClasses } from "../lib/useStickToBottom.js";
-import { duration } from "../lib/time.js";
+import { absoluteTitle, clockTime, duration } from "../lib/time.js";
 import { inputBlocks, outputBlock } from "../lib/tool-body.js";
 import { useClock } from "../lib/useClock.js";
 import { FAST_MODE_MARK } from "./AgentChip.js";
@@ -124,9 +124,14 @@ function Segment({ segment }: { segment: TranscriptSegment }) {
               </span>
             ) : null}
             Prompt
-            <span className="ml-2 text-xs text-neutral-500">
-              {new Date(segment.at).toLocaleTimeString()}
-            </span>
+            {/* The call's clock, in the thread's one vocabulary
+                (run-view-41); the exact moment stays in the tooltip. */}
+            <time
+              dateTime={new Date(segment.at).toISOString()}
+              className="ml-2 text-xs tabular-nums text-neutral-500"
+            >
+              {clockTime(segment.at)}
+            </time>
           </summary>
           <pre className="mt-1 whitespace-pre-wrap [overflow-wrap:anywhere] font-mono text-xs">
             {segment.text}
@@ -407,7 +412,7 @@ export function PlayerPane({
               {call ? (
                 <span
                   data-testid="player-working"
-                  title={`${who} working since ${new Date(call.at).toLocaleTimeString()}`}
+                  title={`${who} working since ${absoluteTitle(call.at)}`}
                   className="hidden whitespace-nowrap text-xs text-neutral-500 @md:inline dark:text-neutral-400"
                 >
                   {who} working · {duration(now - call.at)}

@@ -293,7 +293,8 @@ The Captain thread shall keep every moment legible in time: visible time separat
 
 - the stamp is the message's clock time in the reader's locale, at the type scale's small step in tabular figures and a quiet neutral, standing at the bubble's outer foot — before a Boss bubble, after a counterpart's — outside the text's measure so it never reflows a message, the way chat clients keep it ([DR-010](../decisions/010-interface-craft.md) §8);
 - the stamp is a time element carrying the moment in machine-readable form and the exact date and time in its tooltip;
-- a narration line, a failure line, and a settled machine card keep their moment in the tooltip alone — a stamp on every glyph line would be noise beside the messages.
+- a narration line, a failure line, and a settled machine card keep their moment in the tooltip alone — a stamp on every glyph line would be noise beside the messages;
+- a player pane's call header prints the call's clock in the same form, so one clock runs across the panes ([DR-010](../decisions/010-interface-craft.md) §2).
 
 #### run-view-59
 
