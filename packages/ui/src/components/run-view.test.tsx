@@ -243,6 +243,37 @@ describe("RUN-30: boss messages echo as user bubbles", () => {
     const bubble = screen.getByTestId("boss-bubble");
     expect(bubble.textContent).toContain("/code fix the bug");
   });
+
+  // run-view-41: every message bubble wears its clock time at its
+  // outer foot, the exact moment in the tooltip; narration lines keep
+  // the moment in the tooltip alone.
+  test("every message bubble carries a quiet clock stamp", () => {
+    renderRun([...TURN_ONE, ...TURN_TWO_QUESTION]);
+    const stamps = screen.getAllByTestId("message-time");
+    const bubbles = [
+      ...screen.getAllByTestId("boss-bubble"),
+      ...screen.getAllByTestId("question-bubble"),
+    ];
+    expect(stamps.length).toBeGreaterThanOrEqual(bubbles.length);
+    for (const stamp of stamps) {
+      const at = Date.parse(stamp.getAttribute("dateTime") ?? "");
+      expect(Number.isFinite(at)).toBe(true);
+      expect(stamp.textContent).toBe(
+        new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+      );
+      expect(stamp.title).toBe(new Date(at).toLocaleString());
+    }
+    // A Boss bubble's stamp stands on its outer side — before the
+    // bubble in a right-aligned row; a counterpart's stands after.
+    const boss = screen.getAllByTestId("boss-bubble")[0];
+    expect(boss.previousElementSibling?.getAttribute("data-testid")).toBe("message-time");
+    const question = screen.getByTestId("question-bubble");
+    expect(question.nextElementSibling?.getAttribute("data-testid")).toBe("message-time");
+    for (const line of screen.getAllByTestId("system-line")) {
+      expect(within(line).queryByTestId("message-time")).toBeNull();
+      expect(line.title).toBeTruthy();
+    }
+  });
 });
 
 describe("RUN-19: pane structure from the fixture stream", () => {

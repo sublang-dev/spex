@@ -48,3 +48,9 @@ export function duration(ms: number): string {
 export function absoluteTitle(at: number): string {
   return new Date(at).toLocaleString();
 }
+
+/** A message's clock time for its stamp — "5:22 PM", or "17:22" where
+ * the locale says so — always paired with `absoluteTitle` for the date. */
+export function clockTime(at: number): string {
+  return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}

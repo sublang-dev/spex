@@ -10,7 +10,7 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import type { CaptainLine, SessionView } from "../state/reducer.js";
 import { stateLabel } from "../lib/labels.js";
-import { duration } from "../lib/time.js";
+import { absoluteTitle, clockTime, duration } from "../lib/time.js";
 import { useClock } from "../lib/useClock.js";
 import { useStickToBottom, jumpPillClasses } from "../lib/useStickToBottom.js";
 import { latestCall } from "./PlayerPane.js";
@@ -73,10 +73,11 @@ function Line({
       );
     case "boss":
       return (
-        <div className="flex justify-end" title={time}>
+        <div className="flex items-end justify-end gap-2" title={time}>
+          <Stamp at={line.at} />
           <div
             data-testid="boss-bubble"
-            className="max-w-[85%] rounded-2xl rounded-br-md bg-brand-600 px-3 py-1.5 text-sm text-white"
+            className="min-w-0 max-w-[85%] rounded-2xl rounded-br-md bg-brand-600 px-3 py-1.5 text-sm text-white"
           >
             {source ? (
               <div className="mb-0.5 flex justify-end">
@@ -95,20 +96,21 @@ function Line({
       );
     case "speech":
       return (
-        <div className="flex justify-start" title={time}>
-          <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-neutral-100 px-3 py-1.5 dark:bg-neutral-800">
+        <div className="flex items-end justify-start gap-2" title={time}>
+          <div className="min-w-0 max-w-[85%] rounded-2xl rounded-bl-md bg-neutral-100 px-3 py-1.5 dark:bg-neutral-800">
             <Markdown text={line.text} links="web-only" />
           </div>
+          <Stamp at={line.at} />
         </div>
       );
     case "question":
       // A player asking the Boss — the moment the product is built
       // around — renders as an incoming message from a named sender.
       return (
-        <div className="flex justify-start" title={time}>
+        <div className="flex items-end justify-start gap-2" title={time}>
           <div
             data-testid="question-bubble"
-            className="max-w-[85%] rounded-2xl rounded-bl-md border-l-4 border-amber-400 bg-neutral-100 px-3 py-1.5 dark:border-amber-500 dark:bg-neutral-800"
+            className="min-w-0 max-w-[85%] rounded-2xl rounded-bl-md border-l-4 border-amber-400 bg-neutral-100 px-3 py-1.5 dark:border-amber-500 dark:bg-neutral-800"
           >
             {line.player ? (
               <div className="text-xs font-semibold text-amber-700 dark:text-amber-300">
@@ -119,6 +121,7 @@ function Line({
               <Markdown text={line.text} links="web-only" />
             </div>
           </div>
+          <Stamp at={line.at} />
         </div>
       );
     case "error":
@@ -164,6 +167,26 @@ function Line({
     default:
       return <SystemLine text={line.text} title={time} />;
   }
+}
+
+/** A message's time stamp (run-view-41): the clock time at the
+ * bubble's outer foot, the way chat clients keep it — quiet, tabular,
+ * outside the text's measure so it never reflows a message — with the
+ * exact date and time in its tooltip and on the element for machines.
+ * Narration lines keep their moment in the tooltip alone: a stamp on
+ * every glyph line would be noise beside the messages. */
+function Stamp({ at }: { at: number }) {
+  if (!Number.isFinite(at)) return null;
+  return (
+    <time
+      dateTime={new Date(at).toISOString()}
+      title={absoluteTitle(at)}
+      data-testid="message-time"
+      className="shrink-0 pb-1 text-xs tabular-nums text-neutral-400 dark:text-neutral-500"
+    >
+      {clockTime(at)}
+    </time>
+  );
 }
 
 /** A Boss text without a last line that only repeats the intent
@@ -230,10 +253,9 @@ export function timeSeparator(
 }
 
 function formatSeparator(date: Date, withDay: boolean): string {
-  const time = date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  // The separator speaks the stamps' clock (DR-010 §2): one time
+  // vocabulary down the thread.
+  const time = clockTime(date.getTime());
   if (!withDay) return time;
   const today = new Date();
   if (date.toDateString() === today.toDateString()) return time;

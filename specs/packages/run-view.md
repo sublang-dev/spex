@@ -289,7 +289,11 @@ When the abort control is activated, it shall acknowledge instantly — disabled
 
 #### run-view-41
 
-The Captain thread shall render visible time separators before the first message, after gaps of more than ten minutes, and on day boundaries, with exact timestamps staying available on hover.
+The Captain thread shall keep every moment legible in time: visible time separators before the first message, after gaps of more than ten minutes, and on day boundaries, and a clock stamp on every message bubble — the Boss's, the Captain's, and a question's — with exact timestamps staying available on hover:
+
+- the stamp is the message's clock time in the reader's locale, at the type scale's small step in tabular figures and a quiet neutral, standing at the bubble's outer foot — before a Boss bubble, after a counterpart's — outside the text's measure so it never reflows a message, the way chat clients keep it ([DR-010](../decisions/010-interface-craft.md) §8);
+- the stamp is a time element carrying the moment in machine-readable form and the exact date and time in its tooltip;
+- a narration line, a failure line, and a settled machine card keep their moment in the tooltip alone — a stamp on every glyph line would be noise beside the messages.
 
 #### run-view-59
 
@@ -787,7 +791,7 @@ While a fixture turn is active, the test suite shall assert the Captain thread s
 
 #### run-view-54
 
-The test suite shall assert time separators appear before the first line, after >10-minute gaps, and on day changes [[run-view-41](#run-view-41)]; that known states map to human labels with unknown ids humanized [[run-view-59](#run-view-59)]; that the project palette is driven end-to-end by keyboard (opens focused, arrows highlight, Enter picks, Escape closes with the composer draft intact) [[run-view-42](#run-view-42)]; and that Escape hides the slash menu without touching the draft [[run-view-43](#run-view-43)].
+The test suite shall assert time separators appear before the first line, after >10-minute gaps, and on day changes, and that every Boss, Captain, and question bubble carries a clock stamp at its outer foot — its clock time as text, the exact moment in its tooltip and on the element — while narration lines carry no stamp [[run-view-41](#run-view-41)]; that known states map to human labels with unknown ids humanized [[run-view-59](#run-view-59)]; that the project palette is driven end-to-end by keyboard (opens focused, arrows highlight, Enter picks, Escape closes with the composer draft intact) [[run-view-42](#run-view-42)]; and that Escape hides the slash menu without touching the draft [[run-view-43](#run-view-43)].
 
 #### run-view-55
 

@@ -14,6 +14,13 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
+### Added
+
+- Every message in the Captain thread — yours, the Captain's, and a
+  player's question — carries its clock time at the bubble's outer
+  foot, quiet and tabular, with the exact date and time on hover; the
+  thread's time separators speak the same clock.
+
 ### Changed
 
 - **Nothing ends.** The runtime is held only for a turn: a session's
