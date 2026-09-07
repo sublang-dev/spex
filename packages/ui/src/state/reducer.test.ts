@@ -431,6 +431,87 @@ describe("run-view-2: a failure repeated is one line with a count", () => {
   });
 });
 
+describe("run-view-127: a player's failure shows once per call", () => {
+  const rec = (seq: number, record: Record<string, unknown>) => ({
+    seq,
+    record: record as unknown as TmuxPlayRecord,
+  });
+  const prompt = (seq: number, turnId: number) =>
+    rec(seq, { type: "player_prompt", turnId, timestamp: seq, playerId: "dev.coder", prompt: "go" });
+  const event = (seq: number, turnId: number, event: Record<string, unknown>) =>
+    rec(seq, { type: "player_event", turnId, timestamp: seq, playerId: "dev.coder", event });
+  const finished = (seq: number, turnId: number, error: string) =>
+    rec(seq, {
+      type: "player_finished", turnId, timestamp: seq, playerId: "dev.coder",
+      result: { status: "error", playerId: "dev.coder", turnId, error },
+    });
+  const MESSAGE = "The model requires a newer version of the CLI. Please upgrade and try again.";
+  const shape = (view: ReturnType<typeof fresh>) =>
+    view.players["dev.coder"].segments.map((segment) =>
+      segment.kind === "error"
+        ? ["error", segment.message, segment.count]
+        : segment.kind === "result"
+          ? ["result", segment.error, segment.errorAbove]
+          : [segment.kind],
+    );
+
+  test("repeated error events and the result's echo fold into one line", () => {
+    // The Codex adapter's shape: the failure as two error events, then
+    // again as the finished result's error.
+    const view = applyRecords(fresh(), [
+      prompt(1, 2),
+      event(2, 2, { type: "error", payload: { code: "error", message: MESSAGE, recoverable: false } }),
+      event(3, 2, { type: "error", payload: { message: MESSAGE, recoverable: false } }),
+      finished(4, 2, MESSAGE),
+    ]);
+    expect(shape(view)).toEqual([
+      ["prompt"],
+      ["error", MESSAGE, 2],
+      ["result", MESSAGE, true],
+    ]);
+  });
+
+  test("a failure passed off as prose gives way to its line", () => {
+    // The Claude adapter's shape: the failure as assistant text, then an
+    // error event, then done and the finished result.
+    const view = applyRecords(fresh(), [
+      prompt(1, 2),
+      event(2, 2, { type: "text", payload: { content: MESSAGE } }),
+      event(3, 2, { type: "error", payload: { code: "success", message: MESSAGE, recoverable: false } }),
+      event(4, 2, { type: "done", payload: { status: "error", result: MESSAGE } }),
+      finished(5, 2, MESSAGE),
+    ]);
+    expect(shape(view)).toEqual([
+      ["prompt"],
+      ["error", MESSAGE, undefined],
+      ["result", MESSAGE, true],
+    ]);
+  });
+
+  test("a different failure, or the next call, keeps its own line", () => {
+    const view = applyRecords(fresh(), [
+      prompt(1, 1),
+      event(2, 1, { type: "error", payload: { message: "disk full" } }),
+      event(3, 1, { type: "error", payload: { message: MESSAGE } }),
+      finished(4, 1, MESSAGE),
+      prompt(5, 2),
+      event(6, 2, { type: "text", payload: { content: "Working on it." } }),
+      event(7, 2, { type: "error", payload: { message: MESSAGE } }),
+      finished(8, 2, "the call was aborted by the runtime"),
+    ]);
+    expect(shape(view)).toEqual([
+      ["prompt"],
+      ["error", "disk full", undefined],
+      ["error", MESSAGE, undefined],
+      ["result", MESSAGE, true],
+      ["prompt"],
+      ["text"],
+      ["error", MESSAGE, undefined],
+      ["result", "the call was aborted by the runtime", undefined],
+    ]);
+  });
+});
+
 describe("run-view-9: a parked question outlives other machines' reports", () => {
   const park = {
     seq: 970,

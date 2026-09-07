@@ -80,6 +80,14 @@ When a player turn completes, that player's pane shall report the turn's usage b
 | a cost, with or without tokens | nothing for it — no amount in any currency, whatever its provenance |
 | neither | no usage line — an unreported figure is silence, never a zero nobody measured |
 
+#### run-view-127
+
+When the session record stream delivers a player's failure — an error event, or a finished result reporting an error — that player's pane shall show the failure once per call, however many channels of the stream carry it ([DR-003](../decisions/003-runtime-reuse.md): an adapter may say one failure as prose, as repeated error events, and again in its result):
+
+- an error event whose message is identical to the call's standing failure line folds into that line as a visible count (×2, ×3, …) whose meaning is also in text — never merged with a different failure or across calls;
+- a text segment of the same call that is exactly the failure's words — a failure passed off as prose — gives way to the failure line;
+- the call's result line reads "✗ failed" with the words in its tooltip when its error repeats the failure line above it, and prints the error only where no line carries it.
+
 ### Pane Visibility
 
 #### run-view-7

@@ -47,6 +47,10 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Fixed
 
+- A player's failure shows once per call: an adapter that says the
+  same failure as prose, as repeated error events, and again in its
+  result now yields one failure line with a count, and a result line
+  that reads "failed" with the words in its tooltip.
 - Removing an Up next intent with the pointer no longer leaves the Undo
   line standing until the next click: only a keyboard removal hands
   focus to Undo, so the line lapses on schedule.

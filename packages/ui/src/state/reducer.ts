@@ -70,14 +70,44 @@ export type TranscriptSegment = SegmentMeta &
         output?: unknown;
         durationMs?: number;
       }
-    | { kind: "error"; message: string }
+    | {
+        kind: "error";
+        message: string;
+        /** How many identical failures this line stands for within
+         * its call — a repeat folds into it (run-view-127). */
+        count?: number;
+      }
     | {
         kind: "result";
         status: "ok" | "aborted" | "error";
         error?: string;
+        /** The error repeats the call's failure line above it, so the
+         * result line says only that the call failed (run-view-127). */
+        errorAbove?: boolean;
         usage?: UsageView;
       }
   );
+
+/** The segments of the current call — everything since its prompt. */
+function currentCall(segments: TranscriptSegment[]): TranscriptSegment[] {
+  let start = 0;
+  for (let i = segments.length - 1; i >= 0; i -= 1) {
+    if (segments[i].kind === "prompt") { start = i; break; }
+  }
+  return segments.slice(start);
+}
+
+/** The call's standing failure line, if it has one. */
+function callFailure(
+  segments: TranscriptSegment[],
+): Extract<TranscriptSegment, { kind: "error" }> | undefined {
+  const call = currentCall(segments);
+  for (let i = call.length - 1; i >= 0; i -= 1) {
+    const segment = call[i];
+    if (segment.kind === "error") return segment;
+  }
+  return undefined;
+}
 
 export interface PlayerView {
   id: string;
@@ -304,12 +334,26 @@ function applyAgentEvent(
     }
     case "error": {
       closeStreamingText(segments);
-      segments.push({
-        ...meta,
-        kind: "error",
-        message:
-          (event.payload as { message?: string })?.message ?? "agent error",
-      });
+      const message =
+        (event.payload as { message?: string })?.message ?? "agent error";
+      // One failure, several channels (run-view-127, DR-003): an
+      // adapter may say the same failure as prose, as repeated error
+      // events, and in its result. The pane shows it once per call.
+      const trimmed = message.trim();
+      const start = segments.length - currentCall(segments).length;
+      for (let i = segments.length - 1; i >= start; i -= 1) {
+        const segment = segments[i];
+        if (segment.kind === "text" && segment.text.trim() === trimmed) {
+          // The failure passed off as prose gives way to its line.
+          segments.splice(i, 1);
+        }
+      }
+      const standing = callFailure(segments);
+      if (standing && standing.message === message) {
+        standing.count = (standing.count ?? 1) + 1;
+        return undefined;
+      }
+      segments.push({ ...meta, kind: "error", message });
       return undefined;
     }
     case "done": {
@@ -400,11 +444,17 @@ export function applyRecord(
         status: "ok" | "aborted" | "error";
         error?: string;
       };
+      // The result's error is the failure line's words again more
+      // often than not (run-view-127): the line then says only that
+      // the call failed, the words kept for its tooltip.
+      const errorAbove =
+        !!result.error && callFailure(target.segments)?.message === result.error;
       target.segments.push({
         ...meta,
         kind: "result",
         status: result.status,
         ...(result.error ? { error: result.error } : {}),
+        ...(errorAbove ? { errorAbove: true } : {}),
         ...(target.turnUsage ? { usage: target.turnUsage } : {}),
       });
       break;

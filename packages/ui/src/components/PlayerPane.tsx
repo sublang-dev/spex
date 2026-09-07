@@ -240,9 +240,25 @@ function Segment({ segment }: { segment: TranscriptSegment }) {
       );
     }
     case "error":
+      // One line per failure (run-view-127): a repeat folds into a
+      // count whose meaning is also in text (DR-010 §7).
       return (
-        <div className="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
-          {segment.message}
+        <div
+          data-testid="player-failure"
+          title={timeTitle(segment.at)}
+          className="flex items-baseline gap-2 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+        >
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{segment.message}</span>
+          {segment.count !== undefined && segment.count > 1 ? (
+            <span
+              data-testid="player-failure-count"
+              title={`The same failure ${segment.count} times in this call`}
+              className="shrink-0 font-medium"
+            >
+              <span aria-hidden="true">×{segment.count}</span>
+              <span className="sr-only">, {segment.count} times</span>
+            </span>
+          ) : null}
         </div>
       );
     case "result":
@@ -252,6 +268,10 @@ function Segment({ segment }: { segment: TranscriptSegment }) {
           className="flex items-center gap-2 border-t border-neutral-200 pt-1 text-xs dark:border-neutral-800"
         >
           <span
+            data-testid="player-result"
+            // An error the failure line above already carries is not
+            // printed twice (run-view-127): the words stay in the tooltip.
+            title={segment.errorAbove ? segment.error : undefined}
             className={
               segment.status === "ok"
                 ? "text-emerald-700 dark:text-emerald-400"
@@ -264,7 +284,9 @@ function Segment({ segment }: { segment: TranscriptSegment }) {
               ? "✓ finished"
               : segment.status === "aborted"
                 ? "◇ aborted"
-                : `✗ ${segment.error ?? "error"}`}
+                : segment.errorAbove
+                  ? "✗ failed"
+                  : `✗ ${segment.error ?? "error"}`}
           </span>
           {segment.usage ? <Usage usage={segment.usage} /> : null}
         </div>

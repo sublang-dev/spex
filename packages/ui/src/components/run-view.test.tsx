@@ -1864,6 +1864,34 @@ const TOOL_FATES = [
   },
 ] as typeof FULL_RUN;
 
+describe("run-view-127: a player's failure shows once per call", () => {
+  const MESSAGE = "The model requires a newer version of the CLI. Please upgrade and try again.";
+  const FAILED_CALL = [
+    { seq: 1, record: { type: "turn_started", turnId: 2, timestamp: 1, turn: { id: 2, prompt: "go" } } },
+    { seq: 2, record: { type: "player_prompt", turnId: 2, timestamp: 2, playerId: "dev.coder", prompt: "go" } },
+    { seq: 3, record: { type: "player_event", turnId: 2, timestamp: 3, playerId: "dev.coder", event: { type: "text", payload: { content: MESSAGE } } } },
+    { seq: 4, record: { type: "player_event", turnId: 2, timestamp: 4, playerId: "dev.coder", event: { type: "error", payload: { code: "error", message: MESSAGE } } } },
+    { seq: 5, record: { type: "player_event", turnId: 2, timestamp: 5, playerId: "dev.coder", event: { type: "error", payload: { message: MESSAGE } } } },
+    { seq: 6, record: { type: "player_finished", turnId: 2, timestamp: 6, playerId: "dev.coder", result: { status: "error", playerId: "dev.coder", turnId: 2, error: MESSAGE } } },
+  ] as unknown as typeof FULL_RUN;
+
+  test("one failure line with its count, and a result line that does not repeat it", () => {
+    renderRun(FAILED_CALL);
+    const pane = screen.getByTestId("player-pane-dev.coder");
+    const failures = within(pane).getAllByTestId("player-failure");
+    expect(failures).toHaveLength(1);
+    expect(failures[0].textContent).toContain(MESSAGE);
+    const count = within(failures[0]).getByTestId("player-failure-count");
+    expect(count.textContent).toContain("×2");
+    expect(count.textContent).toContain("2 times");
+    // The prose that only repeated the failure is gone with it.
+    expect(within(pane).queryAllByText(MESSAGE, { selector: "p" })).toHaveLength(0);
+    const result = within(pane).getByTestId("player-result");
+    expect(result.textContent).toBe("✗ failed");
+    expect(result.title).toBe(MESSAGE);
+  });
+});
+
 describe("run-view-50: color is never the only channel in a player pane", () => {
   test("tool cards say how they ended, and the running mark says running", () => {
     renderRun(TOOL_FATES);
