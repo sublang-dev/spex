@@ -165,6 +165,7 @@ async function startHarness(
     runCommand?: import("./forge.js").RunCommand;
     compileSpawner?: import("./compile.js").LineSpawner;
     adapterRuntime?: import("./service.js").CoreServiceOptions["adapterRuntime"];
+    agentOptions?: import("./service.js").CoreServiceOptions["agentOptions"];
   } = {},
 ): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "spex-core-it-"));
@@ -205,6 +206,7 @@ async function startHarness(
     // DR-024: the fake-adapter harness fakes the readiness runtime half
     // too, so verdicts never depend on the host's installed runtimes.
     adapterRuntime: options.adapterRuntime ?? (() => ({ usable: true })),
+    agentOptions: options.agentOptions,
     ...(options.realShell ? {} : {captainFactory: async () => captain}),
     env: options.env ?? {},
     home: join(dir, "home"),
@@ -595,6 +597,117 @@ test("CORE-23: readiness is adapter-keyed with positions and requirements", asyn
 
   client.close();
   await harness.service.stop();
+});
+
+test("settings-36: model discovery uses the captured environment without opening sessions or changing config", async (t) => {
+  const env = { ANTHROPIC_API_KEY: "test-key", SPEX_OPTIONS_TEST: "captured environment" };
+  const calls: string[] = [];
+  const discovered = {
+    adapter: "claude" as const,
+    effortValues: ["low", "medium", "high", "max"],
+    fastModeSupported: true,
+    discovery: {
+      status: "available" as const,
+      models: [{ id: "claude-fable-5-1", name: "Claude Fable 5.1", effortValues: ["high", "max"], fastModeSupported: false }],
+    },
+  };
+  const harness = await startHarness(VALID_CONFIG, {
+    env,
+    agentOptions: async (adapter, receivedEnv) => {
+      assert.equal(receivedEnv, env, "discovery receives the shell-supplied environment");
+      calls.push(adapter);
+      return adapter === "claude" ? discovered : {
+        adapter, effortValues: ["low", "high"], fastModeSupported: false,
+        discovery: { status: "unavailable", reason: "Fixture runtime is offline" },
+      };
+    },
+  });
+  const client = new Client(harness.service.port());
+  t.after(async () => { client.close(); await harness.service.stop(); rmSync(harness.dir, { recursive: true, force: true }); });
+  await client.open();
+  assert.equal((await client.expectOk("config.get", {})).status, "valid");
+  await client.expectOk("config.edit", { op: { kind: "captain.set", patch: { instruction: "Before discovery" } } });
+  assert.deepEqual(calls, [], "startup, config reads and saves do not discover models");
+
+  const configPath = join(harness.dir, "playbook.config.yaml");
+  const configBefore = readFileSync(configPath, "utf8");
+  const sessionsDir = join(harness.dataDir, "sessions");
+  const filesBefore = readdirSync(sessionsDir).sort();
+  assert.deepEqual(await client.expectOk("agent.options", { adapter: "claude" }), discovered);
+  assert.deepEqual(await client.expectOk("agent.options", { adapter: "codex" }), {
+    adapter: "codex", effortValues: ["low", "high"], fastModeSupported: false,
+    discovery: { status: "unavailable", reason: "Fixture runtime is offline" },
+  });
+  client.sendRaw(JSON.stringify({ type: "agent.options", id: "unknown-adapter", adapter: "unknown" }));
+  const rejected = await client.waitFor((m) => m.type === "reply" && m.id === "unknown-adapter");
+  assert.ok(rejected.type === "reply" && !rejected.ok);
+  assert.equal(rejected.error.code, "invalid_message");
+  assert.deepEqual(calls, ["claude", "codex"], "unknown adapters never enter discovery");
+  assert.equal(readFileSync(configPath, "utf8"), configBefore);
+  assert.deepEqual(readdirSync(sessionsDir).sort(), filesBefore);
+  assert.deepEqual(await client.expectOk("session.list", {}), []);
+  assert.equal(harness.stats.runs.length, 0, "discovery submits no agent task");
+
+  await client.expectOk("config.edit", { op: { kind: "captain.set", patch: { model: "manual-unlisted-model" } } });
+  assert.match(readFileSync(configPath, "utf8"), /manual-unlisted-model/);
+  assert.equal((await client.expectOk("config.get", {})).status, "valid");
+  assert.deepEqual(calls, ["claude", "codex"], "unavailable discovery does not gate config editing");
+});
+
+test("playbook-library-39: role binding edits preserve tuning and distinguish disabled from inherited fast mode", async (t) => {
+  const config = VALID_CONFIG
+    .replace("    model: claude-test\nplaybooks:", "    model: claude-test\n    fastMode: true\nplaybooks:")
+    .replace("      coder: dev.coder", `      coder: # role comment
+        player: dev.coder
+        model: role-model # model comment
+        effort: high # effort comment
+        fastMode: false # explicit disabled`).trimStart();
+  const harness = await startHarness(config);
+  const client = new Client(harness.service.port());
+  t.after(async () => { client.close(); await harness.service.stop(); rmSync(harness.dir, { recursive: true, force: true }); });
+  await client.open();
+  const path = join(harness.dir, "playbook.config.yaml");
+  const readRole = () => parseYaml(readFileSync(path, "utf8")).playbooks.code.roles.coder;
+  const base = { kind: "playbook.role.bind" as const, playbookId: "code", role: "coder", playerId: "dev.coder" };
+  const untouched = config.slice(0, config.indexOf("playbooks:"));
+
+  await client.expectOk("config.edit", { op: base });
+  assert.deepEqual(readRole(), { player: "dev.coder", model: "role-model", effort: "high", fastMode: false });
+  await client.expectOk("config.edit", { op: { ...base, model: "another-role-model" } });
+  assert.deepEqual(readRole(), { player: "dev.coder", model: "another-role-model", effort: "high", fastMode: false });
+  const retained = readFileSync(path, "utf8");
+  for (const comment of ["# role comment", "# model comment", "# effort comment", "# explicit disabled"]) assert.ok(retained.includes(comment), comment);
+  assert.equal(retained.slice(0, retained.indexOf("playbooks:")), untouched);
+
+  for (const fastMode of [true, false, null] as const) {
+    await client.expectOk("config.edit", { op: { ...base, fastMode } });
+    assert.deepEqual(readRole(), {
+      player: "dev.coder", model: "another-role-model", effort: "high",
+      ...(fastMode === null ? {} : { fastMode }),
+    });
+    const state = await client.expectOk("config.get", {});
+    assert.ok(state.status === "valid");
+    assert.equal(state.summary.playbooks[0].roles.coder.fastMode, fastMode ?? undefined);
+    assert.equal(state.summary.players[0].agent.fastMode, true, "the player's default stays unchanged");
+  }
+
+  // Promote a real shorthand without losing its comment; false must not
+  // be mistaken for an absent override against this fast-enabled player.
+  writeFileSync(path, config.replace(/      coder:[\s\S]*$/, "      coder: dev.coder # shorthand comment\n"));
+  await harness.service.reloadConfig();
+  await client.expectOk("config.edit", { op: { ...base, fastMode: false } });
+  assert.deepEqual(readRole(), { player: "dev.coder", fastMode: false });
+  assert.match(readFileSync(path, "utf8"), /# shorthand comment/);
+
+  // Invalid user data must be refused intact, not silently dropped by
+  // rebuilding a role block from only the fields this editor knows.
+  const invalid = readFileSync(path, "utf8").replace("        fastMode: false", "        unknownTuning: keep-me\n        fastMode: false");
+  writeFileSync(path, invalid);
+  const refused = await client.command("config.edit", { op: { ...base, effort: "low" } });
+  assert.ok(!refused.ok && refused.error.code === "invalid_config");
+  assert.match(refused.error.message, /unknownTuning/);
+  assert.equal(readFileSync(path, "utf8"), invalid);
+  assert.equal(harness.stats.runs.length, 0);
 });
 
 test("a reload superseded while probing broadcasts no stale readiness", async () => {

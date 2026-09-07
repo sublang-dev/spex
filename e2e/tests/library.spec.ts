@@ -6,8 +6,60 @@
 // row, and removing a playbook — each landing in the shared config.
 
 import { test, expect, open, nav } from "../src/harness";
+import { parse } from "yaml";
 
 test.use({ appOptions: { project: true } });
+
+test.describe("runtime binding options", () => {
+  test.use({ appOptions: {
+    project: true,
+    agentOptions: async (adapter) => ({
+      adapter, effortValues: ["low", "medium", "high", "max"], fastModeSupported: true,
+      discovery: { status: "available", models: [
+        { id: "claude-fable-5-1", name: "Claude Fable 5.1", effortValues: ["low", "high"], fastModeSupported: false },
+        { id: "claude-opus-5", name: "Claude Opus 5", effortValues: ["low", "high", "max"], fastModeSupported: true },
+      ] },
+    }),
+  } });
+
+  test("playbook-library-39: discovered binding tuning saves explicit Off and restores inheritance", async ({ page, app }) => {
+    await app.core.command("config.edit", { op: { kind: "player.set", playerId: "dev.coder", patch: { fastMode: true } } });
+    const readRole = () => parse(app.readConfig()).playbooks.code.roles.coder;
+    await open(page, app);
+    await nav(page, "Playbooks").click();
+    const edit = page.getByTestId("role-bind-code-coder");
+    const editor = page.getByTestId("binding-editor-coder");
+    await edit.click();
+    await editor.getByTestId("binding-model-mode").selectOption("pin");
+    const model = editor.getByTestId("binding-model-value-select");
+    await model.selectOption("claude-fable-5-1");
+    await editor.getByTestId("binding-effort-mode").selectOption("pin");
+    const effort = editor.getByTestId("binding-effort-value");
+    await expect(effort.locator("option")).toHaveText(["Choose effort…", "low", "high"]);
+    await effort.selectOption("high");
+    await expect(editor.getByTestId("binding-save")).toBeDisabled();
+    await editor.getByTestId("binding-fast-mode").selectOption("off");
+    await editor.getByTestId("binding-save").click();
+    await expect(editor).toBeHidden();
+    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "claude-fable-5-1", effort: "high", fastMode: false });
+
+    await edit.click();
+    await expect(editor.getByTestId("binding-fast-mode")).toHaveValue("off");
+    await model.selectOption("claude-opus-5");
+    await effort.selectOption("low");
+    await editor.getByTestId("binding-save").click();
+    await expect(editor).toBeHidden();
+    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "claude-opus-5", effort: "low", fastMode: false });
+
+    await edit.click();
+    await expect(editor.getByTestId("binding-fast-mode")).toHaveValue("off");
+    await editor.getByTestId("binding-fast-mode").selectOption("inherit");
+    await editor.getByTestId("binding-save").click();
+    await expect(editor).toBeHidden();
+    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "claude-opus-5", effort: "low" });
+    expect(parse(app.readConfig()).players["dev.coder"].fastMode).toBe(true);
+  });
+});
 
 test("playbook-library-41: list, enable a built-in, work the stage row, remove", async ({
   page,

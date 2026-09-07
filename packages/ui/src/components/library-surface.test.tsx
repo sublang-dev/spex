@@ -147,6 +147,11 @@ function renderLibrary() {
 }
 
 beforeEach(() => {
+  useAppStore.setState({ loadAgentOptions: async (adapter) => ({
+    adapter, effortValues: adapter === "claude" ? ["high", "ultracode"] : adapter === "codex" ? ["high", "ultra"] : ["high"],
+    fastModeSupported: adapter === "claude" || adapter === "codex",
+    discovery: { status: "unavailable", reason: "Fixture" },
+  }) });
   commandMock.mockReset();
   commandMock.mockImplementation(async (type: string) => {
     if (type === "compile.check") {
@@ -188,6 +193,7 @@ describe("PBLIB-4: configured roles name the player that answers them", () => {
     renderLibrary();
     fireEvent.click(screen.getByTestId("role-bind-code-coder"));
     const editor = screen.getByTestId("binding-editor-coder");
+    await within(editor).findByText("Model list unavailable: Fixture");
     // Every lane in the roster is offerable, none invented here.
     expect(
       Array.from(
@@ -288,6 +294,7 @@ describe("DR-015: built-ins section from the catalog", () => {
     fireEvent.click(within(card).getByTestId("builtin-player-host"));
     const popover = within(card).getByTestId("agent-popover");
     fireEvent.click(within(popover).getByTestId("agent-adapter-codex"));
+    await within(popover).findByText("Model list unavailable: Fixture");
     fireEvent.change(within(popover).getByTestId("agent-model"), {
       target: { value: "gpt-5.5-codex" },
     });
@@ -813,7 +820,7 @@ describe("PBLIB-35: the slc demo example card", () => {
     }
   });
 
-  test("a compile role's agent is chosen in place before compiling", () => {
+  test("a compile role's agent is chosen in place before compiling", async () => {
     renderLibrary();
     fireEvent.click(screen.getByTestId("example-prefill"));
     fireEvent.click(screen.getByTestId("compile-player-Reviewer"));
@@ -821,11 +828,14 @@ describe("PBLIB-35: the slc demo example card", () => {
     // The compile form knows the Captain, so copying from it is offered.
     expect(within(popover).getByTestId("agent-same-as-captain")).toBeTruthy();
     fireEvent.click(within(popover).getByTestId("agent-adapter-gemini"));
+    await within(popover).findByText("Model list unavailable: Fixture");
+    fireEvent.change(within(popover).getByTestId("agent-model"), { target: { value: "gemini-3-pro" } });
+    fireEvent.change(within(popover).getByTestId("agent-effort"), { target: { value: "high" } });
     fireEvent.click(within(popover).getByTestId("agent-save"));
 
     const row = screen.getByTestId("compile-player-Reviewer").parentElement!;
     expect(within(row).getByTestId("agent-chip").textContent).toContain(
-      "gemini · claude-opus-5 @ high",
+      "gemini · gemini-3-pro @ high",
     );
     // The untouched role keeps the neutral block.
     const coderRow = screen.getByTestId("compile-player-Coder").parentElement!;

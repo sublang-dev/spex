@@ -7,6 +7,8 @@
 
 Accepted; the seeded lineup is amended by [DR-025](025-playbook-7-adoption.md) — single-role CODE plus the review and decide blocks.
 
+Amended by [DR-052](052-runtime-model-options.md): model and tuning choices come from runtime discovery.
+
 ## Context
 
 - Playbook 3.0 removed the shared config's `profiles` map and the agent-block `profile` key: every `captain` and `players.<role>` value is an inline agent block (`adapter`, `model`, `effort`, `permissions`) or a scalar adapter shorthand, and the launcher migrates profiles-era configs in place once, with a backup.

@@ -11,6 +11,8 @@ Amended (2026-09-02): the Dashboard carries a Running band between the attention
 Amended by [DR-051](051-runtime-held-for-a-turn.md): a session's delete control waits only on a turn in flight, since the runtime is held for a turn and nothing is ended.
 Amends [DR-035](035-intent-ledger.md) (a never-worked intent leaves the ledger without a trace; history lists done work, records included), [DR-011](011-project-workspace.md) (the Repo tab becomes the project's Overview), and [DR-029](029-session-history-home.md) (session deletion is decided); playbook 12.1 and 12.2's published host-capabilities facade was tried against the Captain shell and refused — its repository object lacks `acquire` and `runCohort`, and its per-playbook ledgers diverge where the shell requires one — so [DR-037](037-playbook-12-adoption.md)'s by-path builder stands.
 
+Amended by [DR-052](052-runtime-model-options.md): model and tuning choices come from runtime discovery.
+
 ## Context
 
 - The owner's review (2026-09-02), on the live app: History listed nine crossed-out "dropped" rows for intents that were queued from issues and removed before any work; the Sources band counted 29 "open records" for a project whose records are nearly all complete; dropping a queued intent asked for a confirmation; the row's provenance action read "Open source"; the Workspace's Repo tab repeated the Dashboard's issue and pull-request lists; a queued intent could not be removed from the Workspace; a session could not be deleted anywhere.

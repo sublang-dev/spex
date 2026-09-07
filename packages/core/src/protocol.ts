@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { TmuxPlayRecord as RuntimeRecord } from "@sublang/cligent/tmux-play";
 
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 
 export type TmuxPlayRecord = RuntimeRecord & {contextSeq?: number};
 
@@ -192,6 +192,23 @@ export interface SessionInfo {
    * stream is complete only up to this sequence, so served history is
    * never presented as complete when it is not (DR-036). */
   streamIncompleteAfterSeq?: number;
+}
+
+export interface AgentModelOption {
+  id: string;
+  name: string;
+  resolvedModel?: string;
+  effortValues?: readonly string[];
+  defaultEffort?: string;
+  fastModeSupported?: boolean;
+}
+
+export interface AgentOptions {
+  adapter: AdapterName;
+  effortValues: readonly string[];
+  fastModeSupported: boolean;
+  discovery: { status: "available"; models: readonly AgentModelOption[] }
+    | { status: "unavailable"; reason: string };
 }
 
 export interface ReadinessEntry {
@@ -434,6 +451,8 @@ export const configEditOpSchema = z.discriminatedUnion("kind", [
     // clears the override so the role inherits the player (DR-032).
     model: z.union([z.string().min(1), z.literal(false)]).nullable().optional(),
     effort: z.union([z.string().min(1), z.literal(false)]).nullable().optional(),
+    // Fast mode is literal: false disables; null inherits the player.
+    fastMode: z.boolean().nullable().optional(),
   }),
   z.object({
     kind: z.literal("playbook.option.set"),
@@ -461,6 +480,7 @@ export type Channel = z.infer<typeof channelSchema>;
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("config.get"), id }),
   z.object({ type: z.literal("readiness.get"), id }),
+  z.object({ type: z.literal("agent.options"), id, adapter: adapterNameSchema }),
   z.object({ type: z.literal("project.list"), id }),
   z.object({ type: z.literal("project.register"), id, path: z.string().min(1) }),
   z.object({ type: z.literal("project.remove"), id, projectId: z.string().min(1) }),
@@ -631,6 +651,7 @@ export type CommandType = Command["type"];
 export interface CommandResults {
   "config.get": ConfigState;
   "readiness.get": ReadinessEntry[];
+  "agent.options": AgentOptions;
   "project.list": ProjectInfo[];
   "project.rebind": ProjectInfo;
   "storage.diagnostics": { file: string; reason: string; blocking: boolean }[];

@@ -49,12 +49,13 @@ export function bindRole(
     playerId: string;
     model?: string | false | null;
     effort?: string | false | null;
+    fastMode?: boolean | null;
   },
 ): Promise<unknown> {
   // An untouched tuning is absent, not `undefined`: the op means
-  // "inherit the player" only when the key does not appear.
+  // "preserve the existing value" when a key does not appear; null clears it.
   const tuning = Object.fromEntries(
-    Object.entries({ model: next.model, effort: next.effort }).filter(
+    Object.entries({ model: next.model, effort: next.effort, fastMode: next.fastMode }).filter(
       ([, value]) => value !== undefined,
     ),
   );

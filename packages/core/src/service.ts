@@ -45,6 +45,7 @@ import {
   parseCommand,
   PROTOCOL_VERSION,
   type AdapterName,
+  type AgentOptions,
   type Channel,
   type Command,
   type ConfigState,
@@ -84,6 +85,7 @@ import {
   writeSpecFile,
 } from "./specs.js";
 import { checkToolchain, compilePlaybook, type LineSpawner } from "./compile.js";
+import { readAgentOptions } from "./agent-options.js";
 import { isFastModeSupported } from "@sublang/cligent";
 import type { PlayerAdapterImports } from "@sublang/cligent/tmux-play";
 
@@ -124,6 +126,8 @@ export interface CoreServiceOptions {
   adapterRuntime?: (
     adapter: AdapterName,
   ) => AdapterRuntimeCheck | Promise<AdapterRuntimeCheck>;
+  /** Task-free runtime model discovery; substituted in hermetic tests. */
+  agentOptions?: (adapter: AdapterName, env: NodeJS.ProcessEnv) => Promise<AgentOptions>;
   captainFactory?: CaptainFactory;
   env?: NodeJS.ProcessEnv;
   home?: string;
@@ -758,6 +762,8 @@ export class CoreService {
         return this.configState;
       case "readiness.get":
         return this.readiness();
+      case "agent.options":
+        return (this.options.agentOptions ?? readAgentOptions)(command.adapter, this.env);
       case "project.list":
         return this.store.listProjects();
       case "project.register": {

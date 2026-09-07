@@ -91,6 +91,11 @@ npm start
 `npm start` builds the workspaces and launches the desktop app. Real
 playbook runs need a ready coding-agent adapter; issue and PR panels need
 an authenticated `gh` CLI; compiling playbooks needs `slc`.
+Claude and Codex run through SDK dependencies installed in this checkout.
+Updating a separate CLI or desktop app does not update those copies.
+If a model requires a newer runtime, run
+`npm update @anthropic-ai/claude-agent-sdk @openai/codex-sdk` here, then restart Spex.
+
 App releases on [GitHub Releases](https://github.com/sublang-ai/spex/releases)
 (`app-v*` tags) ship as source with a changelog: check out the tag and run
 the commands above.

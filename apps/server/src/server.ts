@@ -61,7 +61,7 @@ export interface ServerShellOptions {
   core?: Pick<
     CoreServiceOptions,
     | "adapterImports"
-    | "adapterRuntime"
+    | "adapterRuntime" | "agentOptions"
     | "captainFactory"
     | "env"
     | "home"

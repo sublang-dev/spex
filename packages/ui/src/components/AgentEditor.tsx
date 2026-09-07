@@ -15,23 +15,14 @@ import {
   type ReadinessEntry,
 } from "@sublang/spex-core/protocol";
 
+import { useAgentOptions, modelTuning } from "../lib/agent-options.js";
+import { ModelField } from "./ModelField.js";
+import { ModelDiscoveryStatus } from "./ModelDiscoveryStatus.js";
 import type { AgentPatch } from "../lib/config-ops.js";
 import { useFitInBox } from "../lib/popover-fit.js";
 import { FAST_MODE_MARK, type ChipAgent } from "./AgentChip.js";
 
 export const ADAPTERS = adapterNameSchema.options;
-
-/** Adapter-scoped effort vocabularies (DR-019), mirroring cligent's
- * EFFORT_SUPPORT: Claude adds ultracode, Codex adds ultra, Kimi is
- * binary off/on. This list is presentational — core composition
- * validates against cligent itself and is the actual gate. */
-export const EFFORT_VOCAB: Record<AdapterName, readonly string[]> = {
-  claude: ["minimal", "low", "medium", "high", "xhigh", "max", "ultracode"],
-  codex: ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
-  gemini: ["minimal", "low", "medium", "high", "xhigh", "max"],
-  kimi: ["off", "on"],
-  opencode: ["minimal", "low", "medium", "high", "xhigh", "max"],
-};
 
 const MODES = ["auto", "bypass", "none"] as const;
 type Mode = (typeof MODES)[number];
@@ -114,19 +105,19 @@ export function AgentEditor(props: AgentEditorProps) {
     (props.readiness ?? []).map((entry) => [entry.adapter, entry]),
   );
 
-  /** Only an adapter the embedded runtime declares as supporting fast
-   * mode offers the switch (DR-038, settings-1). */
-  const supportsFastMode = (name: AdapterName): boolean =>
-    readinessByAdapter.get(name)?.fastModeSupported ?? false;
+  const discovery = useAgentOptions(adapter);
+  const tuning = modelTuning(discovery.options, model);
+  const models = discovery.options?.discovery.status === "available" ? discovery.options.discovery.models : [];
+  const supportsFastMode = tuning.fastModeSupported ?? readinessByAdapter.get(adapter)?.fastModeSupported ?? false;
+  const invalidEffort = Boolean(discovery.options && effort && !tuning.efforts.includes(effort));
+  const invalidFastMode = Boolean(fastMode && discovery.options && !supportsFastMode);
 
   function pickAdapter(next: AdapterName): void {
+    if (next === adapter) return;
     setAdapter(next);
-    // The effort vocabulary is adapter-scoped: a value the new
-    // adapter does not accept clears to none rather than riding
-    // along into a config the runtime would refuse.
-    if (effort && !EFFORT_VOCAB[next].includes(effort)) setEffort("");
-    // Fast mode likewise: no switch, no value.
-    if (fastMode && !supportsFastMode(next)) setFastMode(false);
+    setModel("");
+    setEffort("");
+    setFastMode(false);
   }
 
   const dirty =
@@ -235,13 +226,7 @@ export function AgentEditor(props: AgentEditorProps) {
       <div className="grid grid-cols-2 gap-2 text-sm">
         <label className="flex flex-col gap-0.5">
           <span className="text-xs text-neutral-500">Model (optional)</span>
-          <input
-            data-testid="agent-model"
-            value={model}
-            onChange={(event) => setModel(event.target.value)}
-            placeholder={`default for ${adapter}`}
-            className="w-full min-w-0 rounded border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
-          />
+          <ModelField value={model} models={models} onChange={setModel} testId="agent-model" />
         </label>
         <label className="flex flex-col gap-0.5">
           <span className="text-xs text-neutral-500">Reasoning effort</span>
@@ -252,14 +237,15 @@ export function AgentEditor(props: AgentEditorProps) {
             className="w-full min-w-0 rounded border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900"
           >
             <option value="">(default)</option>
-            {EFFORT_VOCAB[adapter].map((name) => (
+            {effort && !tuning.efforts.includes(effort) && <option value={effort}>{effort}{discovery.options ? " (unsupported)" : " (current)"}</option>}
+            {tuning.efforts.map((name) => (
               <option key={name} value={name}>
                 {name}
               </option>
             ))}
           </select>
         </label>
-        {supportsFastMode(adapter) ? (
+        {(supportsFastMode || fastMode) ? (
           <label className="col-span-2 flex items-center gap-2">
             <input
               type="checkbox"
@@ -269,10 +255,10 @@ export function AgentEditor(props: AgentEditorProps) {
               className="accent-brand-600"
             />
             <span>
-              Fast mode <span aria-hidden>{FAST_MODE_MARK}</span>
+              Fast mode <span aria-hidden>{FAST_MODE_MARK}</span>{invalidFastMode ? " (unsupported)" : ""}
             </span>
             <span className="text-xs text-neutral-500">
-              the adapter's quicker lane for this agent's turns
+              {tuning.fastModeKnown ? (supportsFastMode ? "Supported by this model" : "Not supported by this model") : "Adapter option; model support unverified"}
             </span>
           </label>
         ) : null}
@@ -313,6 +299,10 @@ export function AgentEditor(props: AgentEditorProps) {
           </span>
         </label>
       </div>
+      <ModelDiscoveryStatus state={discovery} />
+      {!tuning.effortKnown && <p className="text-xs text-neutral-500">Effort options apply to the adapter; support for this model is unverified.</p>}
+      {invalidEffort && <p role="alert" className="text-xs text-red-600">Choose a listed effort or the provider default.</p>}
+      {invalidFastMode && <p role="alert" className="text-xs text-red-600">Turn off fast mode for this selection.</p>}
       {error ? (
         <div className="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
           {error}
@@ -322,7 +312,7 @@ export function AgentEditor(props: AgentEditorProps) {
         <button
           type="button"
           data-testid="agent-save"
-          disabled={busy || (!dirty && !props.allowUnchanged)}
+          disabled={busy || invalidEffort || invalidFastMode || (!dirty && !props.allowUnchanged)}
           onClick={save}
           className="rounded-md bg-brand-600 px-3 py-1 text-sm font-medium text-white hover:bg-brand-500 disabled:opacity-40"
         >
@@ -348,15 +338,8 @@ export function AgentEditor(props: AgentEditorProps) {
               const nextAdapter = knownAdapter(captain.adapter);
               setAdapter(nextAdapter);
               setModel(captain.model ?? "");
-              setEffort(
-                captain.effort &&
-                  EFFORT_VOCAB[nextAdapter].includes(captain.effort)
-                  ? captain.effort
-                  : "",
-              );
-              setFastMode(
-                Boolean(captain.fastMode) && supportsFastMode(nextAdapter),
-              );
+              setEffort(captain.effort ?? "");
+              setFastMode(Boolean(captain.fastMode));
               setMode(initialMode(captain));
               setWritablePaths(
                 (captain.permissions?.writablePaths ?? []).join(", "),

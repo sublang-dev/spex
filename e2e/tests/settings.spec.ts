@@ -11,6 +11,50 @@ import { test, expect, open, nav } from "../src/harness";
 
 test.use({ appOptions: { project: true } });
 
+test("settings-36: runtime model choices narrow tuning and preserve custom drafts on refresh", async ({ page, app }) => {
+  await open(page, app);
+  await nav(page, "Settings").click();
+  const captain = page.getByTestId("captain-section");
+  const before = app.readConfig();
+  await captain.getByTestId("captain-edit").click();
+  const modelSelect = captain.getByTestId("agent-model-select");
+  const custom = captain.getByTestId("agent-model");
+  const effort = captain.getByTestId("agent-effort");
+
+  // An omitted current model stays editable; discovery never replaces it.
+  await expect(modelSelect).toBeVisible();
+  await expect(custom).toHaveValue("claude-opus-5");
+  await expect(captain).toContainText("Not in this runtime's list");
+  await expect(captain.getByTestId("agent-fast-mode")).toBeVisible();
+  await expect(effort.locator("option")).toHaveText(["(default)", "low", "medium", "high", "max"]);
+
+  // Exact discovered IDs are native select choices, with this model's
+  // narrower effort list and known lack of fast-mode support.
+  await modelSelect.selectOption("claude-fable-5-1");
+  await expect(modelSelect).toHaveValue("claude-fable-5-1");
+  await expect(custom).toHaveCount(0);
+  await expect(effort.locator("option")).toHaveText(["(default)", "high", "max"]);
+  await expect(captain.getByTestId("agent-fast-mode")).toHaveCount(0);
+  expect(app.readConfig()).toBe(before);
+  await effort.selectOption("high");
+  await captain.getByTestId("agent-save").click();
+  await expect(captain.getByTestId("agent-chip")).toContainText("claude-fable-5-1");
+  await expect.poll(() => app.readConfig()).toContain("model: claude-fable-5-1");
+
+  await captain.getByTestId("captain-edit").click();
+  await expect(modelSelect).toHaveValue("claude-fable-5-1");
+  await modelSelect.selectOption({ label: "Custom model…" });
+  await custom.fill("manual-private-model");
+  const refresh = captain.getByRole("button", { name: "Refresh models", exact: true });
+  await refresh.click();
+  await expect(refresh).toBeEnabled();
+  await expect(custom).toHaveValue("manual-private-model");
+  await expect(captain).toContainText("Adapter option; model support unverified");
+  await captain.getByTestId("agent-save").click();
+  await expect(captain.getByTestId("agent-chip")).toContainText("manual-private-model");
+  await expect.poll(() => app.readConfig()).toContain("model: manual-private-model");
+});
+
 test("settings-29: the Captain row's editor round-trips the shared config", async ({
   page,
   app,

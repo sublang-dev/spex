@@ -9,9 +9,13 @@
 import { useState, type RefObject } from "react";
 import type {
   RoleBindingSummary,
+  AgentModelOption,
   SessionPlayerSummary,
 } from "@sublang/spex-core/protocol";
 
+import { useAgentOptions, modelTuning } from "../lib/agent-options.js";
+import { ModelField } from "./ModelField.js";
+import { ModelDiscoveryStatus } from "./ModelDiscoveryStatus.js";
 import { useFitInBox } from "../lib/popover-fit.js";
 import { usePopover } from "../lib/usePopover.js";
 
@@ -19,6 +23,7 @@ export interface BindingChange {
   playerId: string;
   model?: string | false | null;
   effort?: string | false | null;
+  fastMode?: boolean | null;
 }
 
 /** A tuning field is tri-state: inherit the player's default, take the
@@ -28,8 +33,12 @@ function TuningField({
   value,
   playerDefault,
   onChange,
+  models,
+  efforts,
 }: {
-  label: string;
+  label: "model" | "effort";
+  models?: readonly AgentModelOption[];
+  efforts?: readonly string[];
   value: string | false | undefined;
   playerDefault: string | undefined;
   onChange(next: string | false | null): void;
@@ -55,14 +64,18 @@ function TuningField({
         <option value="provider">the provider's default</option>
         <option value="pin">pin a value…</option>
       </select>
-      {mode === "pin" ? (
-        <input
-          data-testid={`binding-${label}-value`}
-          value={typeof value === "string" ? value : ""}
+      {mode === "pin" && (label === "model" ? (
+        <ModelField value={typeof value === "string" ? value : ""} models={models ?? []}
+          onChange={(next) => onChange(next || false)} testId="binding-model-value" />
+      ) : (
+        <select data-testid="binding-effort-value" value={typeof value === "string" ? value : ""}
           onChange={(event) => onChange(event.target.value)}
-          className="rounded border border-neutral-300 bg-white px-2 py-1 font-mono dark:border-neutral-700 dark:bg-neutral-900"
-        />
-      ) : null}
+          className="rounded border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900">
+          <option value="">Choose effort…</option>
+          {typeof value === "string" && value && !efforts?.includes(value) && <option value={value}>{value} (current)</option>}
+          {(efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+        </select>
+      ))}
     </label>
   );
 }
@@ -90,6 +103,7 @@ export function BindingEditorPopover({
     playerId: binding.playerId,
     model: binding.model,
     effort: binding.effort,
+    fastMode: binding.fastMode,
   });
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -102,6 +116,16 @@ export function BindingEditorPopover({
   // (playbook-library-43, DR-041 §9).
   useFitInBox(boxRef);
   const lane = players.find((player) => player.id === draft.playerId);
+  const discovery = useAgentOptions(lane?.agent.adapter ?? "claude");
+  const effectiveModel = draft.model === false ? "" : draft.model ?? lane?.agent.model ?? "";
+  const tuning = modelTuning(discovery.options, effectiveModel);
+  const models = discovery.options?.discovery.status === "available" ? discovery.options.discovery.models : [];
+  const effectiveEffort = draft.effort === false ? undefined : draft.effort ?? lane?.agent.effort;
+  const invalidEffort = draft.effort === "" || Boolean(discovery.options && effectiveEffort && !tuning.efforts.includes(effectiveEffort));
+  const effectiveFastMode = draft.fastMode ?? lane?.agent.fastMode ?? false;
+  const adapterFastMode = discovery.options?.fastModeSupported;
+  const invalidFastMode = (adapterFastMode === false && draft.fastMode != null) || (effectiveFastMode && tuning.fastModeSupported === false);
+  const invalidModel = typeof draft.model === "string" && !draft.model.trim();
   // Every other position this lane already answers: picking it here
   // joins that one conversation rather than opening a new one.
   const others = (lane?.boundBy ?? []).filter((held) => held !== position);
@@ -146,15 +170,33 @@ export function BindingEditorPopover({
         label="model"
         value={draft.model === null ? undefined : draft.model}
         playerDefault={lane?.agent.model}
+        models={models}
         onChange={(next) => setDraft((current) => ({ ...current, model: next }))}
       />
       <TuningField
         label="effort"
         value={draft.effort === null ? undefined : draft.effort}
         playerDefault={lane?.agent.effort}
+        efforts={tuning.efforts}
         onChange={(next) => setDraft((current) => ({ ...current, effort: next }))}
       />
 
+      {(adapterFastMode === true || draft.fastMode != null || effectiveFastMode) && <label className="flex flex-col gap-1 text-xs">
+        <span className="text-neutral-500 dark:text-neutral-400">Fast mode</span>
+        <select data-testid="binding-fast-mode" value={draft.fastMode == null ? "inherit" : draft.fastMode ? "on" : "off"}
+          onChange={(event) => setDraft((current) => ({ ...current, fastMode: event.target.value === "inherit" ? null : event.target.value === "on" }))}
+          className="rounded border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900">
+          <option value="inherit">Inherit the player ({lane?.agent.fastMode ? "on" : "off"})</option>
+          {adapterFastMode === true && (tuning.fastModeSupported !== false || draft.fastMode === true) && <option value="on">On{tuning.fastModeSupported === false ? " (unsupported)" : ""}</option>}
+          {adapterFastMode === true && <option value="off">Off</option>}
+          {adapterFastMode !== true && draft.fastMode != null && <option value={draft.fastMode ? "on" : "off"}>{draft.fastMode ? "On" : "Off"} ({adapterFastMode === false ? "unsupported" : "current"})</option>}
+        </select>
+        {!tuning.fastModeKnown && <span className="text-neutral-500">Adapter option; model support unverified.</span>}
+      </label>}
+      <ModelDiscoveryStatus state={discovery} />
+      {!tuning.effortKnown && <p className="text-xs text-neutral-500">Effort options apply to the adapter; support for this model is unverified.</p>}
+      {invalidFastMode && <p role="alert" className="text-xs text-red-600">{adapterFastMode === false ? "Clear the fast-mode override; this adapter does not accept it." : "Turn off fast mode for this model."}</p>}
+      {invalidEffort && <p role="alert" className="text-xs text-red-600">Choose a listed effort, inherit, or use the provider default.</p>}
       <p className="text-xs text-neutral-500 dark:text-neutral-400">
         Adapter and permissions belong to the player — edit them in
         Settings.
@@ -174,7 +216,7 @@ export function BindingEditorPopover({
         <button
           type="button"
           data-testid="binding-save"
-          disabled={busy}
+          disabled={busy || invalidEffort || invalidModel || invalidFastMode}
           onClick={() => {
             setBusy(true);
             setError(undefined);

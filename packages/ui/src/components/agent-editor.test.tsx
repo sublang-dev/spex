@@ -17,6 +17,21 @@ import {
   within,
 } from "@testing-library/react";
 
+vi.mock("../lib/agent-options.js", async (original) => {
+  const actual = await original<typeof import("../lib/agent-options.js")>();
+  const efforts: Record<string, string[]> = {
+    claude: ["minimal", "low", "medium", "high", "xhigh", "max", "ultracode"],
+    codex: ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+    gemini: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    kimi: ["off", "on"], opencode: ["low", "high"],
+  };
+  return { ...actual, useAgentOptions: (adapter: string) => ({
+    options: { adapter, effortValues: efforts[adapter], fastModeSupported: adapter === "claude",
+      discovery: { status: "unavailable", reason: "Fixture has no model catalog" } },
+    loading: false, refresh: vi.fn(),
+  }) };
+});
+
 afterEach(cleanup);
 
 import { AgentEditor, AgentEditorPopover } from "./AgentEditor.js";
@@ -127,10 +142,10 @@ describe("DR-019: the effort vocabulary is adapter-scoped", () => {
     expect(editor.options()).toContain("ultra");
   });
 
-  test("switching the adapter keeps an effort both accept", () => {
+  test("switching adapter resets tuning to its defaults", () => {
     const editor = renderEditor({ adapter: "claude", effort: "high" });
     fireEvent.click(screen.getByTestId("agent-adapter-codex"));
-    expect(editor.effort().value).toBe("high");
+    expect(editor.effort().value).toBe("");
     // kimi's binary vocabulary rejects it, so it clears there.
     fireEvent.click(screen.getByTestId("agent-adapter-kimi"));
     expect(editor.effort().value).toBe("");
@@ -444,9 +459,9 @@ describe("DR-038: fast mode is offered where the runtime declares it", () => {
     expect(screen.queryByTestId("agent-fast-mode")).toBeNull();
   });
 
-  test("with no readiness known, no switch is offered", () => {
+  test("discovery supplies capabilities independently of readiness", () => {
     renderEditor({ adapter: "claude" });
-    expect(screen.queryByTestId("agent-fast-mode")).toBeNull();
+    expect(screen.getByTestId("agent-fast-mode")).toBeTruthy();
   });
 
   test("checking writes true; unchecking a set value unsets it", () => {

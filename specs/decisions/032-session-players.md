@@ -10,6 +10,8 @@ Raises the [DR-025](025-playbook-7-adoption.md) floors to playbook 8 and cligent
 Rewrites the per-role agent placement of [DR-019](019-inline-agent-configuration.md) — an agent block belongs to a player, and a role binds to one — and its null-unsets patch rule.
 Replaces [DR-003](003-runtime-reuse.md)'s pane roster: panes are player lanes, not the launch-time union of enabled playbooks' roles.
 
+Amended by [DR-052](052-runtime-model-options.md): role editors use runtime choices and expose fast-mode inheritance.
+
 ## Context
 
 - Playbook 8 separates two things Spex has always conflated, and its own record says why: "player" named both a playbook-local work function and a host agent conversation, so session sharing depended on spelling, and a nested role's configured agent could be silently replaced by an ancestor's.

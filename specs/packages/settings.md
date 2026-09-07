@@ -17,7 +17,7 @@ Integration coverage is exercised through the core service's WebSocket protocol 
 
 #### settings-1
 
-Where the Settings surface is open, the Settings surface shall present the Captain as a row of the session players' shape [[settings-26](#settings-26)] — its agent with that adapter's readiness, and no removal control — whose edit control opens, in place, the Captain's agent editor over the shared config's top-level `captain` entry, with the fields of an inline agent block: adapter (one of the embedded runtime's known adapters, each carrying its readiness indicator), optional model, optional reasoning effort offered only from the selected adapter's effort vocabulary, a fast-mode switch offered only for an adapter the embedded runtime declares as supporting it ([DR-038](../decisions/038-history-is-done-work.md)), and permissions (mode `auto` or `bypass`, optional writable paths):
+Where the Settings surface is open, the Settings surface shall present the Captain as a row of the session players' shape [[settings-26](#settings-26)] — its agent with that adapter's readiness, and no removal control — whose edit control opens, in place, the Captain's agent editor over the shared config's top-level `captain` entry, with the fields of an inline agent block: adapter (one of the embedded runtime's known adapters, each carrying its readiness indicator), optional model and reasoning effort selected from runtime options [[settings-34](#settings-34)], a fast-mode switch following the selected model's known support or the adapter's declared support when model metadata is absent ([DR-038](../decisions/038-history-is-done-work.md)), and permissions (mode `auto` or `bypass`, optional writable paths):
 
 - The editor offers Save and Cancel, and closes on either — Escape cancels too — handing focus back to the row's edit control ([DR-010](../decisions/010-interface-craft.md) §6); one row's editor stands open at a time across the Captain and the players, a second opening closing the first.
 - When a captain edit is saved, the change appears in the shared config file's `captain` entry as a merge patch that alters only the fields the editor surfaced, preserving hand-written fields such as `instruction` and granular permissions (see [[settings-21](#settings-21)]).
@@ -57,6 +57,25 @@ Where the Settings surface is open, the Settings surface shall present the share
 Where the Settings surface is open, the Settings surface shall offer adding a session player by naming its id and giving it a whole agent block ([DR-032](../decisions/032-session-players.md)), and shall report a rejected id in the shared-config write path's own words without writing:
 
 - The seeded block is a complete, deliberate choice, so an untouched draft is savable.
+
+### Model and Tuning Options
+
+#### settings-34
+
+When an agent editor opens or changes adapter, the editor shall request Cligent's model and tuning options through the core protocol ([DR-052](../decisions/052-runtime-model-options.md)):
+
+- Offer exact model IDs, provider default, and explicit custom entry; retain existing values absent from discovery.
+- Use a selected model's known effort list and fast-mode support; otherwise label adapter-wide options as unverified for that model.
+- Preserve draft values while loading or after failure, name unavailable discovery, and offer refresh.
+- Show an existing unsupported effort or fast-mode selection as requiring correction, never silently remove it during discovery.
+
+#### settings-35
+
+When the core receives `agent.options` for a known adapter, it shall return Cligent's adapter capabilities and bounded, task-free model discovery result without changing shared config or opening a Spex session:
+
+- Discovery uses the core's captured environment.
+- Unknown adapters are rejected by the protocol.
+- Discovery failure is returned as unavailable; config load and save do not depend on discovery.
 
 ### Adapter Readiness
 
@@ -189,6 +208,12 @@ Where the Settings UI renders or edits configuration, the Settings UI shall obta
 When an in-place editor saves an agent-block tweak — the captain's or a player's — the core package shall apply it as a merge patch that alters only the provided keys, leaving every other field, hand-written keys such as `instruction`, and comments of the block's config node intact, per [DR-009](../decisions/009-at-hand-interaction.md) and [DR-019](../decisions/019-inline-agent-configuration.md).
 
 ## Verification
+
+### Model Options Coverage
+
+#### settings-36
+
+Where runtime discovery supplies model-specific metadata, unavailable discovery, and a delayed response for a previously selected adapter, the test suite shall exercise the protocol and editors to verify exact model choices, model-specific tuning, preserved custom values, refresh, and rejection of stale results [[settings-34](#settings-34)], without task execution or config mutation during discovery [[settings-35](#settings-35)].
 
 ### Round-Trip Coverage
 

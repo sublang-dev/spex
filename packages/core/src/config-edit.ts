@@ -56,6 +56,8 @@ export type ConfigEditOp =
       playerId: string;
       model?: string | false | null;
       effort?: string | false | null;
+      /** Omitted preserves the override; null inherits; false disables. */
+      fastMode?: boolean | null;
     }
   | { kind: "playbook.option.set"; playbookId: string; key: string; value: unknown }
   | { kind: "playbook.delete"; playbookId: string }
@@ -140,30 +142,29 @@ export function applyConfigOp(text: string, op: ConfigEditOp): string {
     }
     case "playbook.role.bind": {
       const path = ["playbooks", op.playbookId, "roles", op.role];
-      const tuned = op.model !== undefined || op.effort !== undefined;
-      if (!tuned) {
-        // No role tuning: the binding is just the lane, written as the
-        // scalar the launcher's own template uses.
-        doc.setIn(path, op.playerId);
-        break;
+      const existing = doc.getIn(path, true);
+      const keys = ["model", "effort", "fastMode"] as const;
+      if (!isMap(existing)) {
+        if (!keys.some((key) => op[key] !== undefined && op[key] !== null)) {
+          doc.setIn(path, op.playerId);
+          break;
+        }
+        const block = doc.createNode({ player: op.playerId });
+        if (isScalar(existing)) {
+          block.commentBefore = existing.commentBefore;
+          block.comment = existing.comment;
+        }
+        doc.setIn(path, block);
       }
-      const existing = doc.getIn(path);
-      const block: Record<string, unknown> = { player: op.playerId };
-      // A block already there keeps its other tuning key.
-      if (existing && typeof existing === "object" && "toJSON" in existing) {
-        const prior = (existing as { toJSON(): Record<string, unknown> }).toJSON();
-        if (prior.model !== undefined) block.model = prior.model;
-        if (prior.effort !== undefined) block.effort = prior.effort;
-      }
-      for (const key of ["model", "effort"] as const) {
+      // Patch the existing node: rebuilding it loses omitted overrides
+      // and comments, and can silently erase a key validation should reject.
+      doc.setIn([...path, "player"], op.playerId);
+      for (const key of keys) {
         const value = op[key];
         if (value === undefined) continue;
-        // null clears the override, so the role inherits the player's
-        // default again; false selects the provider's (DR-032).
-        if (value === null) delete block[key];
-        else block[key] = value;
+        if (value === null) doc.deleteIn([...path, key]);
+        else doc.setIn([...path, key], value);
       }
-      doc.setIn(path, doc.createNode(block));
       break;
     }
     case "playbook.option.set": {

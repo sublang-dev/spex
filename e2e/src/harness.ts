@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 
 import type {
+  AgentOptions,
   Command,
   CommandResults,
   ServerMessage,
@@ -77,6 +78,27 @@ export interface AppOptions {
   agentDelayMs?: number;
   /** Keep the real Captain journal/recovery; substitute only provider replies. */
   realCaptain?: boolean;
+  /** Substitute task-free model discovery; never start installed providers. */
+  agentOptions?: NonNullable<ServerShellOptions["core"]>["agentOptions"];
+}
+
+/** Deliberately omits the demo's current model, exercising retained custom IDs. */
+function fixtureAgentOptions(adapter: AgentOptions["adapter"]): AgentOptions {
+  return {
+    adapter,
+    effortValues: ["low", "medium", "high", "max"],
+    fastModeSupported: adapter === "claude" || adapter === "codex",
+    discovery: {
+      status: "available",
+      models: adapter === "claude" ? [{
+        id: "claude-fable-5-1", name: "Claude Fable 5.1",
+        effortValues: ["high", "max"], fastModeSupported: false,
+      }] : adapter === "codex" ? [{
+        id: "gpt-6-astra", name: "GPT-6 Astra",
+        effortValues: ["high", "max"], fastModeSupported: true,
+      }] : [],
+    },
+  };
 }
 
 /** The substitute forge's data (dashboard-49): the labels are the
@@ -257,6 +279,7 @@ export async function startApp(options: AppOptions = {}): Promise<App> {
             ? fakeAdapterImports({ fallback: { result: JSON.stringify({ action: "respond", text: "Acknowledged by the real Captain." }) } }).imports
             : demoAdapterImports({ delayMs: options.agentDelayMs ?? 400 }).imports,
           adapterRuntime: () => ({ usable: true }),
+          agentOptions: options.agentOptions ?? (async (adapter) => fixtureAgentOptions(adapter)),
           ...(options.realCaptain ? {} : { captainFactory: async (_composed: unknown, sessionId: string) => demoCaptain(sessionId) }),
           env,
           home,

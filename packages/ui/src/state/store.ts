@@ -11,6 +11,8 @@ import { create } from "zustand";
 import { hasPresentationHeader } from "@sublang/spex-core/protocol";
 import type {
   AgentBlockInput,
+  AdapterName,
+  AgentOptions,
   BuiltinPlaybookInfo,
   ClosedIntent,
   ConfigState,
@@ -145,6 +147,7 @@ export interface AppState {
   /** Bootstrap refresh failure — connected but app state missing. */
   refreshError?: string;
 
+  loadAgentOptions(adapter: AdapterName): Promise<AgentOptions>;
   connect(url?: string): void;
   refresh(): Promise<void>;
   setCurrentProject(projectId: string | undefined): void;
@@ -895,6 +898,8 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       return { version: reply.version };
     },
+
+    loadAgentOptions: (adapter) => getClient().command("agent.options", { adapter }),
 
     async refreshReadiness(): Promise<void> {
       set({ readiness: await getClient().command("readiness.get", {}) });

@@ -33,10 +33,13 @@ When the user toggles a playbook's enabled state, the Library shall persist the 
 
 #### playbook-library-4
 
-When the user edits a role's binding, the Library shall write which session player answers that role together with that role's own model and effort ([DR-032](../decisions/032-session-players.md)), and shall reject an edit the shared-config write path refuses, naming the affected role:
+When the user edits a role's binding, the Library shall write which session player answers that role together with that role's own model, effort, and fast mode ([DR-032](../decisions/032-session-players.md)), and shall reject an edit the shared-config write path refuses, naming the affected role:
 
 - The players offered are the shared config's roster [[settings-26](settings.md#settings-26)]; the editor mints none and offers no adapter or permissions, which belong to the player's envelope.
-- Each tuning is inherit-the-player, the provider's current default, or a pinned value, written as omission, `false`, and the value respectively.
+- Model and effort are inherit-the-player, the provider's current default, or a pinned value, written as omission, `false`, and the value respectively; pinned values use the player's runtime model and effort choices [[settings-34](settings.md#settings-34)].
+- Fast mode is inherit, on, or off for adapters accepting fast-mode requests; an unsupported adapter permits only clearing an existing override.
+- Saving preserves omitted tuning fields and clears only explicit resets.
+- Known model support is checked against effective tuning, including inherited effort and fast mode; the editor offers an explicit correction [[settings-34](settings.md#settings-34)].
 - Choosing a player another binding already names states which bindings those are, because equal ids deliberately share one conversation.
 - The editor is a popover anchored at the role's control, following the house popover idiom ([DR-010](../decisions/010-interface-craft.md) §6): focus enters it on open and returns to the control on close, and Escape, an outside click, and Cancel close it.
 
@@ -269,7 +272,7 @@ When each installed built-in playbook's artifacts are requested, the test suite 
 
 #### playbook-library-39
 
-Where a configured playbook binds two roles, one to a player another playbook also names, the test suite shall assert the Library prints each role's bound player with what that binding effectively runs [[playbook-library-1](#playbook-library-1)], marks the shared role and names the other position holding it [[playbook-library-38](#playbook-library-38)], and leaves the unshared role unmarked; and that rebinding through the editor offers exactly the config's roster, writes the chosen player with a pinned effort, and surfaces a refusal inline while keeping the editor open [[playbook-library-4](#playbook-library-4)]; and that the editor opens with focus inside and closes on Escape, on an outside click, and on Cancel with focus back on the role's control [[playbook-library-4](#playbook-library-4)].
+Where a configured playbook binds two roles, one to a player another playbook also names, the test suite shall assert the Library prints each role's bound player with what that binding effectively runs [[playbook-library-1](#playbook-library-1)], marks the shared role and names the other position holding it [[playbook-library-38](#playbook-library-38)], and leaves the unshared role unmarked; and that rebinding through the editor offers exactly the config's roster, writes the chosen player with pinned effort and inherit/on/off fast mode while preserving untouched tuning and comments, checks effective inherited tuning against known model support, and surfaces a refusal inline while keeping the editor open [[playbook-library-4](#playbook-library-4)]; and that the editor opens with focus inside and closes on Escape, on an outside click, and on Cancel with focus back on the role's control [[playbook-library-4](#playbook-library-4)].
 
 #### playbook-library-40
 
