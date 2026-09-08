@@ -604,6 +604,7 @@ test("settings-36: model discovery uses the captured environment without opening
   const calls: string[] = [];
   const discovered = {
     status: "available" as const,
+    unreportedEffortValues: ["ultracode"],
     models: [{ id: "claude-fable-5-1", name: "Claude Fable 5.1", effortValues: ["high", "max"], fastModeSupported: false }],
   };
   const harness = await startHarness(VALID_CONFIG, {
@@ -630,16 +631,16 @@ test("settings-36: model discovery uses the captured environment without opening
   const filesBefore = readdirSync(sessionsDir).sort();
   assert.deepEqual(await client.expectOk("agent.options", { adapter: "claude" }), {
     adapter: "claude", effortValues: ["minimal", "low", "medium", "high", "xhigh", "max", "ultracode"],
-    orchestrationValues: ["ultracode"], fastModeSupported: true, discovery: discovered,
+    fastModeSupported: true, discovery: discovered,
   });
   assert.deepEqual(await client.expectOk("agent.options", { adapter: "codex" }), {
     adapter: "codex", effortValues: ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
-    orchestrationValues: ["ultra"], fastModeSupported: true,
+    fastModeSupported: true,
     discovery: { status: "unavailable", reason: "Fixture discovery failed" },
   });
   assert.deepEqual(await client.expectOk("agent.options", { adapter: "gemini" }), {
     adapter: "gemini", effortValues: ["minimal", "low", "medium", "high", "xhigh", "max"],
-    orchestrationValues: [], fastModeSupported: false,
+    fastModeSupported: false,
     discovery: { status: "unavailable", reason: "Fixture runtime is offline" },
   });
   client.sendRaw(JSON.stringify({ type: "agent.options", id: "unknown-adapter", adapter: "unknown" }));

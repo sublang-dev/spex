@@ -14,7 +14,7 @@ test.describe("runtime binding options", () => {
   test.use({ appOptions: {
     project: true,
     discoverAgentModels: async () => ({
-      status: "available", models: [
+      status: "available", unreportedEffortValues: ["ultracode"], models: [
         { id: "claude-fable-5-1", name: "Claude Fable 5.1", effortValues: ["low", "high"], fastModeSupported: false },
         { id: "opus", name: "Claude Opus 5", resolvedModel: "claude-opus-5", effortValues: ["low", "high", "max"], fastModeSupported: true },
       ],

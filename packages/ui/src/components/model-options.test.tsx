@@ -11,8 +11,8 @@ import { createRef } from "react";
 
 const originalLoad = useAppStore.getState().loadAgentOptions;
 const options = (adapter: AdapterName = "claude"): AgentOptions => ({
-  adapter, effortValues: ["low", "high", "max", "ultracode"], orchestrationValues: ["ultracode"], fastModeSupported: true,
-  discovery: { status: "available", models: [
+  adapter, effortValues: ["low", "high", "max", ...(adapter === "claude" ? ["ultracode"] : adapter === "codex" ? ["ultra"] : [])], fastModeSupported: true,
+  discovery: { status: "available", ...(adapter === "claude" ? { unreportedEffortValues: ["ultracode"] } : {}), models: [
     { id: "claude-fable-5-1", name: "Fable", effortValues: ["low", "high"], fastModeSupported: false },
     { id: "plain-model", name: "Plain", effortValues: [], fastModeSupported: false },
     { id: "unknown-model", name: "Unknown" },
@@ -122,7 +122,7 @@ test("an adapter without fast-mode requests cannot acquire an explicit Off overr
   await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ fastMode: null })));
 });
 
-test.each(["claude-fable-5-1", "plain-model"])("orchestration effort remains valid for discovered %s in both editors", async (model) => {
+test.each(["claude-fable-5-1", "plain-model"])("discovery-unreported effort remains available for %s in both editors", async (model) => {
   const saveAgent = vi.fn();
   const agent = render(<AgentEditor initial={{ adapter: "claude", model, effort: "ultracode" }} allowUnchanged onSave={saveAgent} />);
   await ready();
@@ -195,4 +195,53 @@ test.each(["available", "unavailable"] as const)("empty custom role model remain
   fireEvent.change(input, { target: { value: "private-alias" } });
   fireEvent.click(screen.getByTestId("binding-save"));
   expect(save).toHaveBeenCalledWith(expect.objectContaining({ model: "private-alias" }));
+});
+
+test.each([
+  { scope: "reported ultra", efforts: ["high", "ultra"], valid: true },
+  { scope: "excluded ultra", efforts: ["high"], valid: false },
+  { scope: "known no effort", efforts: [], valid: false },
+  { scope: "unknown efforts", efforts: undefined, valid: true },
+])("Codex $scope governs agent and inherited role tuning", async ({ efforts, valid }) => {
+  useAppStore.setState({ loadAgentOptions: async () => ({
+    adapter: "codex", effortValues: ["low", "high", "ultra"], fastModeSupported: true,
+    discovery: { status: "available", models: [{ id: "codex-fixture", name: "Codex", effortValues: efforts }] },
+  }) });
+  const save = vi.fn();
+  const agent = render(<AgentEditor initial={{ adapter: "codex", model: "codex-fixture", effort: "ultra" }} allowUnchanged onSave={save} />);
+  await ready();
+  expect((screen.getByTestId("agent-save") as HTMLButtonElement).disabled).toBe(!valid);
+  expect(screen.queryByRole("option", { name: "ultra (adapter-wide)" })).toBeNull();
+  if (valid) {
+    expect(screen.getByRole("option", { name: "ultra" })).toBeTruthy();
+    fireEvent.click(screen.getByTestId("agent-save"));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ effort: "ultra" }));
+  } else {
+    expect(screen.getByRole("option", { name: "ultra (unsupported)" })).toBeTruthy();
+    fireEvent.change(screen.getByTestId("agent-effort"), { target: { value: "" } });
+    expect(screen.queryByRole("option", { name: /ultra/ })).toBeNull();
+  }
+  agent.unmount();
+
+  render(<BindingEditorPopover role="analyst" position="dev.analyst" binding={{ playerId: "analyst", display: "Codex" }}
+    players={[{ id: "analyst", agent: { adapter: "codex", model: "codex-fixture", effort: "ultra" }, display: "Codex", boundBy: [] }]}
+    anchorRef={createRef<HTMLButtonElement>()} onSave={vi.fn(async () => {})} onClose={vi.fn()} />);
+  await ready();
+  expect((screen.getByTestId("binding-save") as HTMLButtonElement).disabled).toBe(!valid);
+  fireEvent.change(screen.getByTestId("binding-effort-mode"), { target: { value: "provider" } });
+  expect((screen.getByTestId("binding-save") as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.change(screen.getByTestId("binding-effort-mode"), { target: { value: "pin" } });
+  expect((screen.getByTestId("binding-save") as HTMLButtonElement).disabled).toBe(!valid);
+  expect(screen.queryByRole("option", { name: "ultra (adapter-wide)" })).toBeNull();
+});
+
+test("a reported tier is never relabeled as an added adapter choice", async () => {
+  const catalog = options();
+  catalog.discovery = { status: "available", unreportedEffortValues: ["ultracode"],
+    models: [{ id: "future-model", name: "Future", effortValues: ["high", "ultracode"] }] };
+  useAppStore.setState({ loadAgentOptions: async () => catalog });
+  render(<AgentEditor initial={{ adapter: "claude", model: "future-model", effort: "ultracode" }} allowUnchanged onSave={vi.fn()} />);
+  await ready();
+  expect(screen.getByRole("option", { name: "ultracode" })).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "ultracode (adapter-wide)" })).toBeNull();
 });

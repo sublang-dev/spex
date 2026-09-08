@@ -6,6 +6,7 @@
 // readiness per adapter, and an outside edit reflected live.
 
 import { writeFileSync } from "node:fs";
+import { parse } from "yaml";
 
 import { test, expect, open, nav } from "../src/harness";
 
@@ -50,9 +51,29 @@ test("settings-36: runtime model choices narrow tuning and preserve custom draft
   await expect(refresh).toBeEnabled();
   await expect(custom).toHaveValue("manual-private-model");
   await expect(captain).toContainText("Adapter option; model support unverified");
+  await captain.getByTestId("agent-fast-mode").check();
   await captain.getByTestId("agent-save").click();
   await expect(captain.getByTestId("agent-chip")).toContainText("manual-private-model");
-  await expect.poll(() => app.readConfig()).toContain("model: manual-private-model");
+  const readCaptain = () => parse(app.readConfig()).captain;
+  await expect.poll(readCaptain).toMatchObject({ adapter: "claude", model: "manual-private-model", effort: "high", fastMode: true });
+
+  // Deliberately switching adapters clears saved tuning; discovery alone
+  // above preserved it. All three resets reach the actual YAML writer.
+  const beforeSwitch = app.readConfig();
+  await captain.getByTestId("captain-edit").click();
+  await expect(custom).toHaveValue("manual-private-model");
+  await expect(effort).toHaveValue("high");
+  await expect(captain.getByTestId("agent-fast-mode")).toBeChecked();
+  await captain.getByTestId("agent-adapter-codex").click();
+  await expect(modelSelect).toHaveValue("");
+  await expect(effort).toHaveValue("");
+  await expect(captain.getByTestId("agent-fast-mode")).not.toBeChecked();
+  expect(app.readConfig()).toBe(beforeSwitch);
+  await captain.getByTestId("agent-save").click();
+  await expect(captain.getByTestId("agent-editor")).toBeHidden();
+  await expect.poll(() => readCaptain().adapter).toBe("codex");
+  const switched = readCaptain();
+  for (const key of ["model", "effort", "fastMode"]) expect(Object.hasOwn(switched, key)).toBe(false);
 });
 
 test("settings-29: the Captain row's editor round-trips the shared config", async ({

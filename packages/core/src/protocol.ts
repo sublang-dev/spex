@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { TmuxPlayRecord as RuntimeRecord } from "@sublang/cligent/tmux-play";
 
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 
 export type TmuxPlayRecord = RuntimeRecord & {contextSeq?: number};
 
@@ -206,9 +206,8 @@ export interface AgentModelOption {
 export interface AgentOptions {
   adapter: AdapterName;
   effortValues: readonly string[];
-  orchestrationValues: readonly string[];
   fastModeSupported: boolean;
-  discovery: { status: "available"; models: readonly AgentModelOption[] }
+  discovery: { status: "available"; models: readonly AgentModelOption[]; unreportedEffortValues?: readonly string[] }
     | { status: "unavailable"; reason: string };
 }
 

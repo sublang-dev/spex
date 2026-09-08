@@ -240,7 +240,7 @@ export function AgentEditor(props: AgentEditorProps) {
             {effort && !tuning.efforts.includes(effort) && <option value={effort}>{effort}{discovery.options ? " (unsupported)" : " (current)"}</option>}
             {tuning.efforts.map((name) => (
               <option key={name} value={name}>
-                {name}{tuning.orchestrationEfforts.includes(name) ? " (adapter-wide)" : ""}
+                {name}{tuning.additionalEfforts.includes(name) ? " (adapter-wide)" : ""}
               </option>
             ))}
           </select>

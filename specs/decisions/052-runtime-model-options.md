@@ -21,7 +21,7 @@ The installed agent runtime and account determine the available choices.
   An alias's resolved model identifies existing canonical pins without rewriting them.
   Existing values are never silently rewritten because discovery omitted them.
 - Known model effort and fast-mode support narrow the editor's choices.
-  Cligent's orchestration efforts remain adapter-wide choices.
+  Cligent identifies adapter efforts the discovery interface cannot report; these remain available as adapter-wide choices.
   Role bindings check inherited tuning too and expose fast-mode inheritance explicitly.
   Missing model metadata remains unknown; adapter-wide options are labeled as such.
 - Discovery does not become an online prerequisite for loading or saving shared config.

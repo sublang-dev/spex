@@ -24,7 +24,6 @@ export async function readAgentOptions(
   return {
     adapter,
     effortValues: effort?.values ?? [],
-    orchestrationValues: effort?.orchestrationValues ?? [],
     fastModeSupported: cligent.isFastModeSupported(adapter),
     discovery,
   };

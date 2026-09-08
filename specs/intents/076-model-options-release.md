@@ -22,7 +22,7 @@ Deliver runtime model options and clarification fixes through registry dependenc
 
 1. Cligent: prepare one version/changelog commit for 0.26.0, then publish through its CI-gated release workflow.
 2. Playbook: prepare one version/changelog commit for 13.1.0, then publish through its CI-gated release workflow.
-3. Spex: record the new dependency floors, require Cligent ^0.26.0 and Playbook ^13.1.0, refresh the registry lockfile, remove missing-export compatibility, and prepare the app's 0.6.0 version/changelog commit.
+3. Spex: record the new dependency floors, require Cligent ^0.26.0 and Playbook ^13.1.0, refresh the registry lockfile, remove missing-export compatibility, replace the changelog's pending-IR note with shipped dependency versions, and prepare the app's 0.6.0 version/changelog commit.
 
 ## Verification
 

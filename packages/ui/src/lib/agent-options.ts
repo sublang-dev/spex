@@ -36,10 +36,12 @@ export function modelTuning(options: AgentOptions | undefined, model: string) {
   const selected = options?.discovery.status === "available"
     ? findModel(options.discovery.models, model)
     : undefined;
-  const orchestrationEfforts = options?.orchestrationValues ?? [];
+  const efforts = selected?.effortValues ?? options?.effortValues ?? [];
+  const additionalEfforts = (options?.discovery.status === "available"
+    ? options.discovery.unreportedEffortValues ?? [] : []).filter((effort) => !efforts.includes(effort));
   return {
-    efforts: [...new Set([...(selected?.effortValues ?? options?.effortValues ?? []), ...orchestrationEfforts])],
-    orchestrationEfforts,
+    efforts: [...new Set([...efforts, ...additionalEfforts])],
+    additionalEfforts,
     effortKnown: selected?.effortValues !== undefined,
     fastModeSupported: selected?.fastModeSupported ?? options?.fastModeSupported,
     fastModeKnown: selected?.fastModeSupported !== undefined,

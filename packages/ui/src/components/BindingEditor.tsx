@@ -35,12 +35,12 @@ function TuningField({
   onChange,
   models,
   efforts,
-  orchestrationEfforts,
+  additionalEfforts,
 }: {
   label: "model" | "effort";
   models?: readonly AgentModelOption[];
   efforts?: readonly string[];
-  orchestrationEfforts?: readonly string[];
+  additionalEfforts?: readonly string[];
   value: string | false | undefined;
   playerDefault: string | undefined;
   onChange(next: string | false | null): void;
@@ -75,7 +75,7 @@ function TuningField({
           className="rounded border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900">
           <option value="">Choose effort…</option>
           {typeof value === "string" && value && !efforts?.includes(value) && <option value={value}>{value} (current)</option>}
-          {(efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}{orchestrationEfforts?.includes(effort) ? " (adapter-wide)" : ""}</option>)}
+          {(efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}{additionalEfforts?.includes(effort) ? " (adapter-wide)" : ""}</option>)}
         </select>
       ))}
     </label>
@@ -180,7 +180,7 @@ export function BindingEditorPopover({
         value={draft.effort === null ? undefined : draft.effort}
         playerDefault={lane?.agent.effort}
         efforts={tuning.efforts}
-        orchestrationEfforts={tuning.orchestrationEfforts}
+        additionalEfforts={tuning.additionalEfforts}
         onChange={(next) => setDraft((current) => ({ ...current, effort: next }))}
       />
 

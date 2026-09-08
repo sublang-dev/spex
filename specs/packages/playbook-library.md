@@ -40,7 +40,7 @@ When the user edits a role's binding, the Library shall write which session play
 - Clearing a pinned value keeps it pinned and shows a validation message; only an explicit mode change selects inheritance or provider default.
 - Fast mode is inherit, on, or off for adapters accepting fast-mode requests; an unsupported adapter permits only clearing an existing override.
 - Saving preserves omitted tuning fields and clears only explicit resets.
-- Known model support is checked against effective tuning, including inherited effort and fast mode; adapter-wide orchestration efforts remain valid, and unsupported values require explicit correction [[settings-34](settings.md#settings-34)].
+- Known model support is checked against effective tuning, including inherited effort and fast mode, with only Cligent's unreported adapter choices supplementing known efforts; unsupported values require explicit correction [[settings-34](settings.md#settings-34)].
 - Choosing a player another binding already names states which bindings those are, because equal ids deliberately share one conversation.
 - The editor is a popover anchored at the role's control, following the house popover idiom ([DR-010](../decisions/010-interface-craft.md) §6): focus enters it on open and returns to the control on close, and Escape, an outside click, and Cancel close it.
 
@@ -273,7 +273,7 @@ When each installed built-in playbook's artifacts are requested, the test suite 
 
 #### playbook-library-39
 
-Where a configured playbook binds two roles, one to a player another playbook also names, the test suite shall assert the Library prints each role's bound player with what that binding effectively runs [[playbook-library-1](#playbook-library-1)], marks the shared role and names the other position holding it [[playbook-library-38](#playbook-library-38)], and leaves the unshared role unmarked; and that rebinding through the editor offers exactly the config's roster, writes the chosen player with pinned effort and inherit/on/off fast mode while preserving untouched tuning and comments, checks effective inherited tuning against known model support, and surfaces a refusal inline while keeping the editor open [[playbook-library-4](#playbook-library-4)]; and that the editor opens with focus inside and closes on Escape, on an outside click, and on Cancel with focus back on the role's control [[playbook-library-4](#playbook-library-4)].
+Where a configured playbook binds two roles, one to a player another playbook also names, the test suite shall assert the Library prints each role's bound player with what that binding effectively runs [[playbook-library-1](#playbook-library-1)], marks the shared role and names the other position holding it [[playbook-library-38](#playbook-library-38)], and leaves the unshared role unmarked; and that rebinding through the editor offers exactly the config's roster, writes the chosen player with pinned effort and inherit/on/off fast mode while preserving untouched tuning and comments, checks effective inherited tuning against known model support, keeps a cleared pin in pin mode with an inline error and no write, and surfaces a refusal inline while keeping the editor open [[playbook-library-4](#playbook-library-4)]; and that the editor opens with focus inside and closes on Escape, on an outside click, and on Cancel with focus back on the role's control [[playbook-library-4](#playbook-library-4)].
 
 #### playbook-library-40
 

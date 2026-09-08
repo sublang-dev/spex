@@ -17,7 +17,9 @@ and `npm start` (desktop) or `npm run start:server` (server).
 ### Added
 
 - Runtime model selection in Settings and role bindings, with model-specific
-  effort and fast-mode options, explicit custom IDs, and refresh.
+  effort and fast-mode options, canonical IDs recognized through aliases,
+  explicit custom pins, and refresh. Adapter efforts supplement model lists
+  only where Cligent's discovery interface cannot report them.
   Registry delivery awaits the dependency releases tracked in IR-076.
 - Every message in the Captain thread — yours, the Captain's, and a
   player's question — carries its clock time at the bubble's outer
@@ -51,9 +53,6 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Fixed
 
-- Keep adapter-wide orchestration efforts available for discovered models,
-  recognize canonical IDs reported through aliases, and preserve empty
-  custom role pins as drafts requiring correction.
 - Preserve role tuning and comments when editing bindings, including an
   explicit fast-mode Off override.
 - A player's failure shows once per call: an adapter that says the

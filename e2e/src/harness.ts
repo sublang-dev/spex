@@ -86,6 +86,7 @@ export interface AppOptions {
 function fixtureModelDiscovery(adapter: AgentOptions["adapter"]): AgentOptions["discovery"] {
   return {
     status: "available",
+    ...(adapter === "claude" ? { unreportedEffortValues: ["ultracode"] } : {}),
     models: adapter === "claude" ? [{
       id: "claude-fable-5-1", name: "Claude Fable 5.1",
       effortValues: ["high", "max"], fastModeSupported: false,
