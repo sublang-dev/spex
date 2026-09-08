@@ -26,14 +26,14 @@ test("settings-36: runtime model choices narrow tuning and preserve custom draft
   await expect(custom).toHaveValue("claude-opus-5");
   await expect(captain).toContainText("Not in this runtime's list");
   await expect(captain.getByTestId("agent-fast-mode")).toBeVisible();
-  await expect(effort.locator("option")).toHaveText(["(default)", "low", "medium", "high", "max"]);
+  await expect.poll(() => effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["", "minimal", "low", "medium", "high", "xhigh", "max", "ultracode"]);
 
   // Exact discovered IDs are native select choices, with this model's
   // narrower effort list and known lack of fast-mode support.
   await modelSelect.selectOption("claude-fable-5-1");
   await expect(modelSelect).toHaveValue("claude-fable-5-1");
   await expect(custom).toHaveCount(0);
-  await expect(effort.locator("option")).toHaveText(["(default)", "high", "max"]);
+  await expect.poll(() => effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["", "high", "max", "ultracode"]);
   await expect(captain.getByTestId("agent-fast-mode")).toHaveCount(0);
   expect(app.readConfig()).toBe(before);
   await effort.selectOption("high");

@@ -17,9 +17,11 @@ The installed agent runtime and account determine the available choices.
 
 - Cligent owns runtime discovery and adapter capabilities; Spex carries its results over the core protocol to every agent and role-binding editor.
 - Discovery runs on demand without sending a task or creating a conversation; failure leaves configuration editing available.
-- Model choices use exact runtime IDs, with provider default and explicit custom entry retained.
+- Model choices write the runtime's reported IDs, including aliases, with provider default and explicit custom entry retained.
+  An alias's resolved model identifies existing canonical pins without rewriting them.
   Existing values are never silently rewritten because discovery omitted them.
 - Known model effort and fast-mode support narrow the editor's choices.
+  Cligent's orchestration efforts remain adapter-wide choices.
   Role bindings check inherited tuning too and expose fast-mode inheritance explicitly.
   Missing model metadata remains unknown; adapter-wide options are labeled as such.
 - Discovery does not become an online prerequisite for loading or saving shared config.

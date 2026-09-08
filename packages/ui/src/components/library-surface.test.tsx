@@ -149,6 +149,7 @@ function renderLibrary() {
 beforeEach(() => {
   useAppStore.setState({ loadAgentOptions: async (adapter) => ({
     adapter, effortValues: adapter === "claude" ? ["high", "ultracode"] : adapter === "codex" ? ["high", "ultra"] : ["high"],
+    orchestrationValues: adapter === "claude" ? ["ultracode"] : [],
     fastModeSupported: adapter === "claude" || adapter === "codex",
     discovery: { status: "unavailable", reason: "Fixture" },
   }) });

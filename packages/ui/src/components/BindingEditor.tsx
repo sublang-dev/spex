@@ -35,10 +35,12 @@ function TuningField({
   onChange,
   models,
   efforts,
+  orchestrationEfforts,
 }: {
   label: "model" | "effort";
   models?: readonly AgentModelOption[];
   efforts?: readonly string[];
+  orchestrationEfforts?: readonly string[];
   value: string | false | undefined;
   playerDefault: string | undefined;
   onChange(next: string | false | null): void;
@@ -66,14 +68,14 @@ function TuningField({
       </select>
       {mode === "pin" && (label === "model" ? (
         <ModelField value={typeof value === "string" ? value : ""} models={models ?? []}
-          onChange={(next) => onChange(next || false)} testId="binding-model-value" />
+          onChange={onChange} allowDefault={false} testId="binding-model-value" />
       ) : (
         <select data-testid="binding-effort-value" value={typeof value === "string" ? value : ""}
           onChange={(event) => onChange(event.target.value)}
           className="rounded border border-neutral-300 bg-white px-2 py-1 dark:border-neutral-700 dark:bg-neutral-900">
           <option value="">Choose effort…</option>
           {typeof value === "string" && value && !efforts?.includes(value) && <option value={value}>{value} (current)</option>}
-          {(efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+          {(efforts ?? []).map((effort) => <option key={effort} value={effort}>{effort}{orchestrationEfforts?.includes(effort) ? " (adapter-wide)" : ""}</option>)}
         </select>
       ))}
     </label>
@@ -178,6 +180,7 @@ export function BindingEditorPopover({
         value={draft.effort === null ? undefined : draft.effort}
         playerDefault={lane?.agent.effort}
         efforts={tuning.efforts}
+        orchestrationEfforts={tuning.orchestrationEfforts}
         onChange={(next) => setDraft((current) => ({ ...current, effort: next }))}
       />
 
@@ -197,6 +200,7 @@ export function BindingEditorPopover({
       {!tuning.effortKnown && <p className="text-xs text-neutral-500">Effort options apply to the adapter; support for this model is unverified.</p>}
       {invalidFastMode && <p role="alert" className="text-xs text-red-600">{adapterFastMode === false ? "Clear the fast-mode override; this adapter does not accept it." : "Turn off fast mode for this model."}</p>}
       {invalidEffort && <p role="alert" className="text-xs text-red-600">Choose a listed effort, inherit, or use the provider default.</p>}
+      {invalidModel && <p role="alert" className="text-xs text-red-600">Enter a model ID, inherit, or use the provider default.</p>}
       <p className="text-xs text-neutral-500 dark:text-neutral-400">
         Adapter and permissions belong to the player — edit them in
         Settings.

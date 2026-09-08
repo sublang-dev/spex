@@ -16,6 +16,9 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Added
 
+- Runtime model selection in Settings and role bindings, with model-specific
+  effort and fast-mode options, explicit custom IDs, and refresh.
+  Registry delivery awaits the dependency releases tracked in IR-076.
 - Every message in the Captain thread — yours, the Captain's, and a
   player's question — carries its clock time at the bubble's outer
   foot, quiet and tabular, with the exact date and time on hover; the
@@ -23,6 +26,7 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Changed
 
+- Refresh the app's SDK runtimes to Claude Code 2.1.263 and Codex 0.153.4.
 - **Nothing ends.** The runtime is held only for a turn: a session's
   agents and its Playbook lease are released when a turn settles and
   taken up again by the next message, so there is no End control, no
@@ -47,6 +51,11 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Fixed
 
+- Keep adapter-wide orchestration efforts available for discovered models,
+  recognize canonical IDs reported through aliases, and preserve empty
+  custom role pins as drafts requiring correction.
+- Preserve role tuning and comments when editing bindings, including an
+  explicit fast-mode Off override.
 - A player's failure shows once per call: an adapter that says the
   same failure as prose, as repeated error events, and again in its
   result now yields one failure line with a count, and a result line

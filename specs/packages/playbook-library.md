@@ -37,9 +37,10 @@ When the user edits a role's binding, the Library shall write which session play
 
 - The players offered are the shared config's roster [[settings-26](settings.md#settings-26)]; the editor mints none and offers no adapter or permissions, which belong to the player's envelope.
 - Model and effort are inherit-the-player, the provider's current default, or a pinned value, written as omission, `false`, and the value respectively; pinned values use the player's runtime model and effort choices [[settings-34](settings.md#settings-34)].
+- Clearing a pinned value keeps it pinned and shows a validation message; only an explicit mode change selects inheritance or provider default.
 - Fast mode is inherit, on, or off for adapters accepting fast-mode requests; an unsupported adapter permits only clearing an existing override.
 - Saving preserves omitted tuning fields and clears only explicit resets.
-- Known model support is checked against effective tuning, including inherited effort and fast mode; the editor offers an explicit correction [[settings-34](settings.md#settings-34)].
+- Known model support is checked against effective tuning, including inherited effort and fast mode; adapter-wide orchestration efforts remain valid, and unsupported values require explicit correction [[settings-34](settings.md#settings-34)].
 - Choosing a player another binding already names states which bindings those are, because equal ids deliberately share one conversation.
 - The editor is a popover anchored at the role's control, following the house popover idiom ([DR-010](../decisions/010-interface-craft.md) §6): focus enters it on open and returns to the control on close, and Escape, an outside click, and Cancel close it.
 

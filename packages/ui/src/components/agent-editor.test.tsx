@@ -26,7 +26,7 @@ vi.mock("../lib/agent-options.js", async (original) => {
     kimi: ["off", "on"], opencode: ["low", "high"],
   };
   return { ...actual, useAgentOptions: (adapter: string) => ({
-    options: { adapter, effortValues: efforts[adapter], fastModeSupported: adapter === "claude",
+    options: { adapter, effortValues: efforts[adapter], orchestrationValues: adapter === "claude" ? ["ultracode"] : [], fastModeSupported: adapter === "claude",
       discovery: { status: "unavailable", reason: "Fixture has no model catalog" } },
     loading: false, refresh: vi.fn(),
   }) };

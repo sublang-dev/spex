@@ -165,7 +165,7 @@ async function startHarness(
     runCommand?: import("./forge.js").RunCommand;
     compileSpawner?: import("./compile.js").LineSpawner;
     adapterRuntime?: import("./service.js").CoreServiceOptions["adapterRuntime"];
-    agentOptions?: import("./service.js").CoreServiceOptions["agentOptions"];
+    discoverAgentModels?: import("./service.js").CoreServiceOptions["discoverAgentModels"];
   } = {},
 ): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "spex-core-it-"));
@@ -206,7 +206,7 @@ async function startHarness(
     // DR-024: the fake-adapter harness fakes the readiness runtime half
     // too, so verdicts never depend on the host's installed runtimes.
     adapterRuntime: options.adapterRuntime ?? (() => ({ usable: true })),
-    agentOptions: options.agentOptions,
+    discoverAgentModels: options.discoverAgentModels,
     ...(options.realShell ? {} : {captainFactory: async () => captain}),
     env: options.env ?? {},
     home: join(dir, "home"),
@@ -603,23 +603,18 @@ test("settings-36: model discovery uses the captured environment without opening
   const env = { ANTHROPIC_API_KEY: "test-key", SPEX_OPTIONS_TEST: "captured environment" };
   const calls: string[] = [];
   const discovered = {
-    adapter: "claude" as const,
-    effortValues: ["low", "medium", "high", "max"],
-    fastModeSupported: true,
-    discovery: {
-      status: "available" as const,
-      models: [{ id: "claude-fable-5-1", name: "Claude Fable 5.1", effortValues: ["high", "max"], fastModeSupported: false }],
-    },
+    status: "available" as const,
+    models: [{ id: "claude-fable-5-1", name: "Claude Fable 5.1", effortValues: ["high", "max"], fastModeSupported: false }],
   };
   const harness = await startHarness(VALID_CONFIG, {
     env,
-    agentOptions: async (adapter, receivedEnv) => {
-      assert.equal(receivedEnv, env, "discovery receives the shell-supplied environment");
+    discoverAgentModels: async (adapter, options) => {
+      assert.equal(options.env, env, "discovery receives the shell-supplied environment");
+      assert.equal(options.timeoutMs, 10_000, "the real reader bounds discovery to ten seconds");
       calls.push(adapter);
-      return adapter === "claude" ? discovered : {
-        adapter, effortValues: ["low", "high"], fastModeSupported: false,
-        discovery: { status: "unavailable", reason: "Fixture runtime is offline" },
-      };
+      if (adapter === "claude") return discovered;
+      if (adapter === "codex") throw new Error("Fixture discovery failed");
+      return { status: "unavailable", reason: "Fixture runtime is offline" };
     },
   });
   const client = new Client(harness.service.port());
@@ -633,16 +628,25 @@ test("settings-36: model discovery uses the captured environment without opening
   const configBefore = readFileSync(configPath, "utf8");
   const sessionsDir = join(harness.dataDir, "sessions");
   const filesBefore = readdirSync(sessionsDir).sort();
-  assert.deepEqual(await client.expectOk("agent.options", { adapter: "claude" }), discovered);
+  assert.deepEqual(await client.expectOk("agent.options", { adapter: "claude" }), {
+    adapter: "claude", effortValues: ["minimal", "low", "medium", "high", "xhigh", "max", "ultracode"],
+    orchestrationValues: ["ultracode"], fastModeSupported: true, discovery: discovered,
+  });
   assert.deepEqual(await client.expectOk("agent.options", { adapter: "codex" }), {
-    adapter: "codex", effortValues: ["low", "high"], fastModeSupported: false,
+    adapter: "codex", effortValues: ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+    orchestrationValues: ["ultra"], fastModeSupported: true,
+    discovery: { status: "unavailable", reason: "Fixture discovery failed" },
+  });
+  assert.deepEqual(await client.expectOk("agent.options", { adapter: "gemini" }), {
+    adapter: "gemini", effortValues: ["minimal", "low", "medium", "high", "xhigh", "max"],
+    orchestrationValues: [], fastModeSupported: false,
     discovery: { status: "unavailable", reason: "Fixture runtime is offline" },
   });
   client.sendRaw(JSON.stringify({ type: "agent.options", id: "unknown-adapter", adapter: "unknown" }));
   const rejected = await client.waitFor((m) => m.type === "reply" && m.id === "unknown-adapter");
   assert.ok(rejected.type === "reply" && !rejected.ok);
   assert.equal(rejected.error.code, "invalid_message");
-  assert.deepEqual(calls, ["claude", "codex"], "unknown adapters never enter discovery");
+  assert.deepEqual(calls, ["claude", "codex", "gemini"], "unknown adapters never enter discovery");
   assert.equal(readFileSync(configPath, "utf8"), configBefore);
   assert.deepEqual(readdirSync(sessionsDir).sort(), filesBefore);
   assert.deepEqual(await client.expectOk("session.list", {}), []);
@@ -651,7 +655,7 @@ test("settings-36: model discovery uses the captured environment without opening
   await client.expectOk("config.edit", { op: { kind: "captain.set", patch: { model: "manual-unlisted-model" } } });
   assert.match(readFileSync(configPath, "utf8"), /manual-unlisted-model/);
   assert.equal((await client.expectOk("config.get", {})).status, "valid");
-  assert.deepEqual(calls, ["claude", "codex"], "unavailable discovery does not gate config editing");
+  assert.deepEqual(calls, ["claude", "codex", "gemini"], "unavailable discovery does not gate config editing");
 });
 
 test("playbook-library-39: role binding edits preserve tuning and distinguish disabled from inherited fast mode", async (t) => {

@@ -77,7 +77,6 @@ meta.md       The spec of specs
 | [DR-037](decisions/037-playbook-12-adoption.md) | 037-playbook-12-adoption.md | Playbook 12 adoption, installed templates and config relocation; host lifecycle amended by DR-045, dependency floors by DR-050 |
 | [DR-038](decisions/038-history-is-done-work.md) | 038-history-is-done-work.md | History is done work: finished records as history seeds, removal without trace, verdict grammar, the project Overview tab, session deletion, the fast-mode mark |
 | [DR-051](decisions/051-runtime-held-for-a-turn.md) | 051-runtime-held-for-a-turn.md | The runtime is held only for a turn: no ending, every message applies current settings onto the session's stored members, one working turn per project, the current conversation as the lane |
-
 | [DR-052](decisions/052-runtime-model-options.md) | 052-runtime-model-options.md | Runtime model and tuning choices through Cligent, shared by all agent editors |
 
 ## Packages

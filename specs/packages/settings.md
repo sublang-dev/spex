@@ -62,18 +62,20 @@ Where the Settings surface is open, the Settings surface shall offer adding a se
 
 #### settings-34
 
-When an agent editor opens or changes adapter, the editor shall request Cligent's model and tuning options through the core protocol ([DR-052](../decisions/052-runtime-model-options.md)):
+When an agent or role-binding editor opens or the adapter it uses changes, the editor shall request Cligent's model and tuning options through the core protocol [[settings-35](#settings-35)] ([DR-052](../decisions/052-runtime-model-options.md)):
 
-- Offer exact model IDs, provider default, and explicit custom entry; retain existing values absent from discovery.
-- Use a selected model's known effort list and fast-mode support; otherwise label adapter-wide options as unverified for that model.
+- Offer runtime model IDs, provider default, and explicit custom entry; recognize a saved ID reported as an alias's resolution without rewriting it, and retain unlisted values.
+- Use known model effort and fast-mode support; keep Cligent's orchestration efforts available and label them adapter-wide. Missing model metadata leaves adapter-wide options unverified for that model.
 - Preserve draft values while loading or after failure, name unavailable discovery, and offer refresh.
-- Show an existing unsupported effort or fast-mode selection as requiring correction, never silently remove it during discovery.
+- Show unsupported effort or fast-mode selections as requiring correction, without treating adapter-wide orchestration efforts as unsupported or silently removing values during discovery.
+- Explicitly switching an agent's adapter resets model, effort, and fast mode to defaults because those settings belong to the previous adapter.
 
 #### settings-35
 
 When the core receives `agent.options` for a known adapter, it shall return Cligent's adapter capabilities and bounded, task-free model discovery result without changing shared config or opening a Spex session:
 
 - Discovery uses the core's captured environment.
+- Adapter effort values, orchestration values, and fast-mode support accompany the model result.
 - Unknown adapters are rejected by the protocol.
 - Discovery failure is returned as unavailable; config load and save do not depend on discovery.
 
@@ -213,7 +215,7 @@ When an in-place editor saves an agent-block tweak — the captain's or a player
 
 #### settings-36
 
-Where runtime discovery supplies model-specific metadata, unavailable discovery, and a delayed response for a previously selected adapter, the test suite shall exercise the protocol and editors to verify exact model choices, model-specific tuning, preserved custom values, refresh, and rejection of stale results [[settings-34](#settings-34)], without task execution or config mutation during discovery [[settings-35](#settings-35)].
+Where runtime discovery supplies model-specific metadata, unavailable discovery, and a delayed response for a previously selected adapter, the test suite shall exercise the protocol and editors to verify model IDs and alias resolutions, model-specific tuning with adapter-wide orchestration efforts, preserved custom values, refresh, and rejection of stale results [[settings-34](#settings-34)], without task execution or config mutation during discovery [[settings-35](#settings-35)].
 
 ### Round-Trip Coverage
 

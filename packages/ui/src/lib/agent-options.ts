@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 SubLang International <https://sublang.ai>
 
 import { useEffect, useState } from "react";
-import type { AdapterName, AgentOptions } from "@sublang/spex-core/protocol";
+import type { AdapterName, AgentModelOption, AgentOptions } from "@sublang/spex-core/protocol";
 import { useAppStore } from "../state/store.js";
 
 /** Discovery belongs to an open editor, never application startup. */
@@ -27,12 +27,19 @@ export function useAgentOptions(adapter: AdapterName) {
   };
 }
 
+export function findModel(models: readonly AgentModelOption[], model: string) {
+  return models.find((entry) => entry.id === model)
+    ?? models.find((entry) => entry.resolvedModel === model);
+}
+
 export function modelTuning(options: AgentOptions | undefined, model: string) {
   const selected = options?.discovery.status === "available"
-    ? options.discovery.models.find((entry) => entry.id === model)
+    ? findModel(options.discovery.models, model)
     : undefined;
+  const orchestrationEfforts = options?.orchestrationValues ?? [];
   return {
-    efforts: selected?.effortValues ?? options?.effortValues ?? [],
+    efforts: [...new Set([...(selected?.effortValues ?? options?.effortValues ?? []), ...orchestrationEfforts])],
+    orchestrationEfforts,
     effortKnown: selected?.effortValues !== undefined,
     fastModeSupported: selected?.fastModeSupported ?? options?.fastModeSupported,
     fastModeKnown: selected?.fastModeSupported !== undefined,

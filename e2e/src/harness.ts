@@ -79,25 +79,20 @@ export interface AppOptions {
   /** Keep the real Captain journal/recovery; substitute only provider replies. */
   realCaptain?: boolean;
   /** Substitute task-free model discovery; never start installed providers. */
-  agentOptions?: NonNullable<ServerShellOptions["core"]>["agentOptions"];
+  discoverAgentModels?: NonNullable<ServerShellOptions["core"]>["discoverAgentModels"];
 }
 
 /** Deliberately omits the demo's current model, exercising retained custom IDs. */
-function fixtureAgentOptions(adapter: AgentOptions["adapter"]): AgentOptions {
+function fixtureModelDiscovery(adapter: AgentOptions["adapter"]): AgentOptions["discovery"] {
   return {
-    adapter,
-    effortValues: ["low", "medium", "high", "max"],
-    fastModeSupported: adapter === "claude" || adapter === "codex",
-    discovery: {
-      status: "available",
-      models: adapter === "claude" ? [{
-        id: "claude-fable-5-1", name: "Claude Fable 5.1",
-        effortValues: ["high", "max"], fastModeSupported: false,
-      }] : adapter === "codex" ? [{
-        id: "gpt-6-astra", name: "GPT-6 Astra",
-        effortValues: ["high", "max"], fastModeSupported: true,
-      }] : [],
-    },
+    status: "available",
+    models: adapter === "claude" ? [{
+      id: "claude-fable-5-1", name: "Claude Fable 5.1",
+      effortValues: ["high", "max"], fastModeSupported: false,
+    }] : adapter === "codex" ? [{
+      id: "gpt-6-astra", name: "GPT-6 Astra",
+      effortValues: ["high", "max"], fastModeSupported: true,
+    }] : [],
   };
 }
 
@@ -279,7 +274,7 @@ export async function startApp(options: AppOptions = {}): Promise<App> {
             ? fakeAdapterImports({ fallback: { result: JSON.stringify({ action: "respond", text: "Acknowledged by the real Captain." }) } }).imports
             : demoAdapterImports({ delayMs: options.agentDelayMs ?? 400 }).imports,
           adapterRuntime: () => ({ usable: true }),
-          agentOptions: options.agentOptions ?? (async (adapter) => fixtureAgentOptions(adapter)),
+          discoverAgentModels: options.discoverAgentModels ?? (async (adapter) => fixtureModelDiscovery(adapter)),
           ...(options.realCaptain ? {} : { captainFactory: async (_composed: unknown, sessionId: string) => demoCaptain(sessionId) }),
           env,
           home,

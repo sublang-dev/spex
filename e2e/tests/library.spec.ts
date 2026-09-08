@@ -13,12 +13,11 @@ test.use({ appOptions: { project: true } });
 test.describe("runtime binding options", () => {
   test.use({ appOptions: {
     project: true,
-    agentOptions: async (adapter) => ({
-      adapter, effortValues: ["low", "medium", "high", "max"], fastModeSupported: true,
-      discovery: { status: "available", models: [
+    discoverAgentModels: async () => ({
+      status: "available", models: [
         { id: "claude-fable-5-1", name: "Claude Fable 5.1", effortValues: ["low", "high"], fastModeSupported: false },
-        { id: "claude-opus-5", name: "Claude Opus 5", effortValues: ["low", "high", "max"], fastModeSupported: true },
-      ] },
+        { id: "opus", name: "Claude Opus 5", resolvedModel: "claude-opus-5", effortValues: ["low", "high", "max"], fastModeSupported: true },
+      ],
     }),
   } });
 
@@ -32,10 +31,30 @@ test.describe("runtime binding options", () => {
     await edit.click();
     await editor.getByTestId("binding-model-mode").selectOption("pin");
     const model = editor.getByTestId("binding-model-value-select");
+    await expect(model).toHaveValue("claude-opus-5");
+    await expect(editor).not.toContainText("Not in this runtime's list");
+    await expect(editor).not.toContainText("model support unverified");
+    const configBefore = app.readConfig();
+    await model.selectOption({ label: "Custom model…" });
+    const custom = editor.getByTestId("binding-model-value");
+    await custom.fill("");
+    await expect(editor.getByTestId("binding-model-mode")).toHaveValue("pin");
+    await expect(editor.getByRole("alert")).toContainText("Enter a model ID");
+    await expect(editor.getByTestId("binding-save")).toBeDisabled();
+    expect(app.readConfig()).toBe(configBefore);
+    await custom.fill("claude-opus-5");
+    await expect(editor).not.toContainText("Not in this runtime's list");
+    await expect(editor).not.toContainText("model support unverified");
+    await editor.getByTestId("binding-save").click();
+    await expect(editor).toBeHidden();
+    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "claude-opus-5" });
+
+    await edit.click();
+    await expect(model).toHaveValue("claude-opus-5");
     await model.selectOption("claude-fable-5-1");
     await editor.getByTestId("binding-effort-mode").selectOption("pin");
     const effort = editor.getByTestId("binding-effort-value");
-    await expect(effort.locator("option")).toHaveText(["Choose effort…", "low", "high"]);
+    await expect.poll(() => effort.locator("option").evaluateAll((options) => options.map((option) => (option as HTMLOptionElement).value))).toEqual(["", "low", "high", "ultracode"]);
     await effort.selectOption("high");
     await expect(editor.getByTestId("binding-save")).toBeDisabled();
     await editor.getByTestId("binding-fast-mode").selectOption("off");
@@ -45,18 +64,19 @@ test.describe("runtime binding options", () => {
 
     await edit.click();
     await expect(editor.getByTestId("binding-fast-mode")).toHaveValue("off");
-    await model.selectOption("claude-opus-5");
-    await effort.selectOption("low");
+    await model.selectOption("opus");
+    await expect(editor.getByTestId("binding-save")).toBeEnabled();
+    await effort.selectOption("ultracode");
     await editor.getByTestId("binding-save").click();
     await expect(editor).toBeHidden();
-    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "claude-opus-5", effort: "low", fastMode: false });
+    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "opus", effort: "ultracode", fastMode: false });
 
     await edit.click();
     await expect(editor.getByTestId("binding-fast-mode")).toHaveValue("off");
     await editor.getByTestId("binding-fast-mode").selectOption("inherit");
     await editor.getByTestId("binding-save").click();
     await expect(editor).toBeHidden();
-    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "claude-opus-5", effort: "low" });
+    await expect.poll(readRole).toEqual({ player: "dev.coder", model: "opus", effort: "ultracode" });
     expect(parse(app.readConfig()).players["dev.coder"].fastMode).toBe(true);
   });
 });
