@@ -75,7 +75,8 @@ When an agent or role-binding editor opens or the adapter it uses changes, the e
 When the core receives `agent.options` for a known adapter, it shall return Cligent's adapter capabilities and bounded, task-free model discovery result without changing shared config or opening a Spex session:
 
 - Discovery uses the core's captured environment.
-- Adapter effort values and fast-mode support accompany the model result, including any efforts its discovery interface cannot report.
+- Adapter effort values and fast-mode support accompany the discovery result.
+- Available results carry Cligent's optional `unreportedEffortValues` separately from each model's effort list: adapter efforts the discovery interface cannot report.
 - Unknown adapters are rejected by the protocol.
 - Discovery failure is returned as unavailable; config load and save do not depend on discovery.
 
