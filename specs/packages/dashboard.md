@@ -150,12 +150,14 @@ Where a band or menu of the Dashboard lists a spec record, the row shall present
 
 Where a Sources row names an issue, pull request, or open intent record with no open intent sourced from that artifact, the row shall carry a Queue control that captures a queued intent for the project with editable seeded text and the source's URL and labels kept as provenance ([DR-038](../decisions/038-history-is-done-work.md)):
 
-| Source | Seeded text |
+| Source | First line |
 | --- | --- |
 | Issue #N | `Address #N: <title>` |
 | Pull request #N | `Review PR #N: <title>` |
 | Intent record IR-N | `Resume IR-<N>: <title>` |
 
+- an issue seed adds a paragraph after a blank line: ``Read the issue and comments. Work on a new branch from the current default-branch commit, implement the requested change, and run relevant checks. Push the branch and open a PR against the default branch with a summary, test results, and `Closes #N` in its description so merging it closes the issue.`` ([DR-054](../decisions/054-issue-intent-delivery.md));
+- issue and pull-request seeds end with the canonical source URL on its own line, separated from an issue's instruction paragraph by a blank line;
 - a row whose source artifact already has an open intent shows that intent's derived state in place of the control, and regains the control when that intent closes.
 
 #### dashboard-31
@@ -329,7 +331,7 @@ Where two ledger reads overlap and the older one's reply lands last, the test su
 
 #### dashboard-37
 
-Where a fixture Sources row lists issue #7, when the user activates its Queue control, the test suite shall assert that a queued intent is captured with the editable seed `Address #7: <title>` and the issue URL as provenance [[dashboard-30](#dashboard-30)], that the Up next band reveals and briefly highlights the new row [[dashboard-31](#dashboard-31)], that the issue row shows the open intent's derived state in place of its Queue control [[dashboard-30](#dashboard-30)], and that the row regains the control when the intent closes [[dashboard-30](#dashboard-30)].
+Where a fixture Sources row lists issue #7, when the user activates its Queue control, the test suite shall assert that a queued intent is captured with the exact editable issue seed and provenance [[dashboard-30](#dashboard-30)], that the Up next band reveals and briefly highlights the new row [[dashboard-31](#dashboard-31)], that the issue row shows the open intent's derived state in place of its Queue control [[dashboard-30](#dashboard-30)], and that the row regains the control when the intent closes [[dashboard-30](#dashboard-30)].
 
 ### Sources Coverage
 

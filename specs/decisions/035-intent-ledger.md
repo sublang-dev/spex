@@ -12,6 +12,7 @@ Amended by [DR-038](038-history-is-done-work.md): an intent dropped before it wa
 Amended (2026-09-02) on the owner's review: the running sessions list again as their own band below the attention queue — a summons and a glance at what is working are two focuses, so the Now band's absorption of the running-sessions section is reversed for the sessions no entry summons; the attention queue stays the summons and the badge still counts it alone.
 Amended (2026-09-02): the permanent deletion deferred below is decided — a remove act retires a closed intent from every band, so a row the Boss no longer wants on the record leaves History behind the inline confirm ([DR-010](010-interface-craft.md) §4) while its acts stay in the append-only log and no state column returns.
 Amended by [DR-051](051-runtime-held-for-a-turn.md): the lane Start reuses is the project's current conversation — derived from stored state — and the fresh lane is the start tab, since no session is ended any more.
+Amended by [DR-054](054-issue-intent-delivery.md): issue capture seeds include verification and PR delivery instructions, with issue closure on merge.
 
 ## Context
 

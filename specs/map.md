@@ -50,7 +50,7 @@ meta.md       The spec of specs
 | [DR-022](decisions/022-prompt-based-migration.md) | 022-prompt-based-migration.md | Prompt-based spec migration: one bundled agent-neutral prompt, `spex lint`, and human review |
 | [DR-023](decisions/023-runtime-compatibility-from-cligent.md) | 023-runtime-compatibility-from-cligent.md | Runtime compatibility from cligent: playbook 4.0 / cligent 0.18 floor, no Spex-declared agent SDKs, live-run supply becomes an app-shell concern |
 | [DR-024](decisions/024-app-supplied-agent-runtimes.md) | 024-app-supplied-agent-runtimes.md | App-supplied agent runtimes: desktop declares the claude/codex/opencode SDKs at `*`; readiness probes availability through cligent with per-tree repairs |
-| [DR-025](decisions/025-playbook-7-adoption.md) | 025-playbook-7-adoption.md | Playbook 7 adoption: code/review/decide built-ins, single-role CODE, controller Captain, cligent 0.20 floor |
+| [DR-025](decisions/025-playbook-7-adoption.md) | 025-playbook-7-adoption.md | Playbook 7 adoption: code/review/decide built-ins (dev added by DR-037), single-role CODE, controller Captain, cligent 0.20 floor |
 | [DR-026](decisions/026-data-graphics-craft.md) | 026-data-graphics-craft.md | Data-graphics craft: keyed honest encodings, computed contrast, content-driven density, d3 engine with live drag, permanent outline + graph toggle, design-check gate |
 | [DR-027](decisions/027-linked-views-contract.md) | 027-linked-views-contract.md | Linked-views contract: shared axes with a seven-rule coupling card, solved density, root-less outline with a decisions branch, intents to the Dashboard |
 | [DR-028](decisions/028-run-machine-view.md) | 028-run-machine-view.md | Run machines drawn: live statechart cards in the Captain pane, machine graph over the artifacts contract, trace-folded frames, captain failures surfaced whole |
@@ -78,6 +78,7 @@ meta.md       The spec of specs
 | [DR-038](decisions/038-history-is-done-work.md) | 038-history-is-done-work.md | History is done work: finished records as history seeds, removal without trace, verdict grammar, the project Overview tab, session deletion, the fast-mode mark |
 | [DR-051](decisions/051-runtime-held-for-a-turn.md) | 051-runtime-held-for-a-turn.md | The runtime is held only for a turn: no ending, every message applies current settings onto the session's stored members, one working turn per project, the current conversation as the lane |
 | [DR-052](decisions/052-runtime-model-options.md) | 052-runtime-model-options.md | Runtime model and tuning choices through Cligent, shared by all agent editors |
+| [DR-054](decisions/054-issue-intent-delivery.md) | 054-issue-intent-delivery.md | Issue seeds end at PR creation; the Boss merges and restores the checkout |
 
 ## Packages
 

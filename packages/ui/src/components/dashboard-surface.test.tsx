@@ -1329,7 +1329,7 @@ describe("dashboard-19/20/24/25/30/37: the Sources band", () => {
     expect(callsOf("intent.queue")).toEqual([
       {
         projectId: "p1",
-        text: "Address #7: Fix the bug\nhttps://github.com/x/y/issues/7",
+        text: "Address #7: Fix the bug\n\nRead the issue and comments. Work on a new branch from the current default-branch commit, implement the requested change, and run relevant checks. Push the branch and open a PR against the default branch with a summary, test results, and `Closes #7` in its description so merging it closes the issue.\n\nhttps://github.com/x/y/issues/7",
         source: {
           kind: "issue",
           ref: "7",
@@ -2240,7 +2240,7 @@ describe("projects-4/6/9, forge-work-lists-1: the Overview tab", () => {
     expect(callsOf("intent.queue")).toEqual([
       {
         projectId: "p1",
-        text: "Address #7: Fix the bug\nhttps://github.com/x/y/issues/7",
+        text: "Address #7: Fix the bug\n\nRead the issue and comments. Work on a new branch from the current default-branch commit, implement the requested change, and run relevant checks. Push the branch and open a PR against the default branch with a summary, test results, and `Closes #7` in its description so merging it closes the issue.\n\nhttps://github.com/x/y/issues/7",
         source: {
           kind: "issue",
           ref: "7",

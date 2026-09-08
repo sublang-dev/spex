@@ -6,6 +6,7 @@
 ## Status
 
 Accepted
+Amended by [DR-037](037-playbook-12-adoption.md): `dev` joins the built-in catalog.
 
 ## Context
 

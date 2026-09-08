@@ -57,11 +57,15 @@ export function openSourceIntents(
  * the first line, the canonical URL rides in the text and again as
  * provenance. */
 export function forgeSeedText(kind: "issue" | "pr", item: ForgeItem): string {
-  const head =
-    kind === "issue"
-      ? `Address #${item.number}: ${item.title}`
-      : `Review PR #${item.number}: ${item.title}`;
-  return `${head}\n${item.url}`;
+  if (kind === "issue") {
+    return [
+      `Address #${item.number}: ${item.title}`,
+      "Read the issue and comments. Work on a new branch from the current default-branch commit, implement the requested change, and run relevant checks. " +
+        `Push the branch and open a PR against the default branch with a summary, test results, and \`Closes #${item.number}\` in its description so merging it closes the issue.`,
+      item.url,
+    ].join("\n\n");
+  }
+  return `Review PR #${item.number}: ${item.title}\n${item.url}`;
 }
 
 /** The one capture control (DR-035): acknowledges in-frame with a
