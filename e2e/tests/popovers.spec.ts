@@ -79,7 +79,22 @@ async function collapseRail(page: Page): Promise<void> {
 }
 
 test.describe("the role editors on the Playbooks surface", () => {
-  test.use({ appOptions: {} });
+  let releaseDiscovery: (() => void) | undefined;
+  test.use({ appOptions: {
+    discoverAgentModels: async () => {
+      await new Promise<void>((resolve) => { releaseDiscovery = resolve; });
+      return { status: "available", models: [{ id: "fixture-model", name: "Fixture model" }] };
+    },
+  } });
+  test.afterEach(() => releaseDiscovery?.());
+
+  async function finishDiscovery(editor: Locator): Promise<void> {
+    await expect(editor).toContainText("Loading model options…");
+    await expect.poll(() => Boolean(releaseDiscovery)).toBe(true);
+    releaseDiscovery!();
+    releaseDiscovery = undefined;
+    await expect(editor).toContainText("Models reported by the installed runtime.");
+  }
 
   test("settings-29, playbook-library-41: an editor opened at a role's control stands inside the pane", async ({
     page,
@@ -104,6 +119,13 @@ test.describe("the role editors on the Playbooks surface", () => {
         await viewport(page),
         `the agent editor at ${width}px`,
       );
+      // Resolve discovery only after the initial fit: the model picker,
+      // custom-value warning and tuning guidance grow the open dialog.
+      await finishDiscovery(popover);
+      await expect(async () => expectInside(
+        await boxOf(popover), await viewport(page),
+        `the agent editor after discovery at ${width}px`,
+      )).toPass();
       await expect(popover.getByTestId("agent-adapter-claude")).toBeVisible();
       expectInside(
         await boxOf(popover.getByTestId("agent-adapter-claude")),
@@ -126,6 +148,13 @@ test.describe("the role editors on the Playbooks surface", () => {
         await viewport(page),
         `the binding editor at ${width}px`,
       );
+      await finishDiscovery(editor);
+      await editor.getByTestId("binding-model-mode").selectOption("pin");
+      await expect(editor.getByTestId("binding-model-value")).toBeVisible();
+      await expect(async () => expectInside(
+        await boxOf(editor), await viewport(page),
+        `the binding editor after pinning a custom model at ${width}px`,
+      )).toPass();
       await pageDoesNotScroll(page);
       await page.keyboard.press("Escape");
       await expect(editor).toHaveCount(0);

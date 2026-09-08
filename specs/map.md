@@ -78,6 +78,7 @@ meta.md       The spec of specs
 | [DR-038](decisions/038-history-is-done-work.md) | 038-history-is-done-work.md | History is done work: finished records as history seeds, removal without trace, verdict grammar, the project Overview tab, session deletion, the fast-mode mark |
 | [DR-051](decisions/051-runtime-held-for-a-turn.md) | 051-runtime-held-for-a-turn.md | The runtime is held only for a turn: no ending, every message applies current settings onto the session's stored members, one working turn per project, the current conversation as the lane |
 | [DR-052](decisions/052-runtime-model-options.md) | 052-runtime-model-options.md | Runtime model and tuning choices through Cligent, shared by all agent editors |
+| [DR-053](decisions/053-model-options-adoption.md) | 053-model-options-adoption.md | Published Cligent 0.26 / Playbook 13.1 floors; required discovery export |
 | [DR-054](decisions/054-issue-intent-delivery.md) | 054-issue-intent-delivery.md | Issue seeds end at PR creation; the Boss merges and restores the checkout |
 
 ## Packages

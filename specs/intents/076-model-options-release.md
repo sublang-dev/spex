@@ -5,8 +5,8 @@
 
 ## Status
 
-Pending release authorization.
-The reviewed local packages are unpublished; registry installs still lack discovery and the revised prompts.
+Upstream releases published; app preparation ready for Claude review.
+App release remains on hold pending owner authorization and the remaining release gates.
 
 ## Intent
 
@@ -14,8 +14,8 @@ Deliver runtime model options and clarification fixes through registry dependenc
 
 ## Deliverables
 
-- [ ] Cligent 0.26.0 and Playbook 13.1.0 published with verified provenance.
-- [ ] Spex requires those versions and installs them from its registry lockfile.
+- [x] Cligent 0.26.0 and Playbook 13.1.0 published with verified provenance.
+- [x] Spex requires those versions and installs them from its registry lockfile.
 - [ ] App 0.6.0 released after its release gates pass.
 
 ## Tasks

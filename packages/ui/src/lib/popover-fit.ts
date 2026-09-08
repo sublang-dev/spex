@@ -94,7 +94,17 @@ export function useFitInBox<T extends HTMLElement>(ref: RefObject<T | null>): vo
     };
     fit();
     const view = el.ownerDocument.defaultView;
+    // Discovery and editable fields can grow an already-open dialog.
+    // Fitting keeps the same size cap and only translates its position,
+    // so observing the resulting size does not feed back on placement.
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined
+      : new ResizeObserver(fit);
+    observer?.observe(el);
     view?.addEventListener("resize", fit);
-    return () => view?.removeEventListener("resize", fit);
+    return () => {
+      observer?.disconnect();
+      view?.removeEventListener("resize", fit);
+    };
   }, [ref]);
 }

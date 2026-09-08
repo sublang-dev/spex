@@ -6,17 +6,15 @@ import type { AdapterName, AgentOptions } from "./protocol.js";
 
 export type AgentModelDiscovery = (adapter: AdapterName, options: { env: NodeJS.ProcessEnv; timeoutMs: number }) => Promise<AgentOptions["discovery"]>;
 
-/** Registry builds without discovery retain configuration editing. */
+/** Discovery failures leave configuration editing available. */
 export async function readAgentOptions(
   adapter: AdapterName,
   env: NodeJS.ProcessEnv,
-  discover: AgentModelDiscovery | undefined = (cligent as typeof cligent & { discoverAgentModels?: AgentModelDiscovery }).discoverAgentModels,
+  discover: AgentModelDiscovery = cligent.discoverAgentModels,
 ): Promise<AgentOptions> {
   let discovery: AgentOptions["discovery"];
   try {
-    discovery = discover
-      ? await discover(adapter, { env, timeoutMs: 10_000 })
-      : { status: "unavailable", reason: "This Spex build does not include model discovery." };
+    discovery = await discover(adapter, { env, timeoutMs: 10_000 });
   } catch (cause) {
     discovery = { status: "unavailable", reason: cause instanceof Error ? cause.message : String(cause) };
   }

@@ -337,16 +337,19 @@ describe("RUN-35: in-place captain agent editing (DR-019)", () => {
     expect(screen.getByTestId("captain-home")).toBeTruthy();
   });
 
-  test("an adapter switch saves through the same patch path", async () => {
-    const { onSaveCaptain } = renderHome();
+  test("an adapter switch resets tuning through the same patch path", async () => {
+    const { onSaveCaptain } = renderHome({
+      captain: { ...CAPTAIN, fastMode: true },
+    });
     fireEvent.click(screen.getByTestId("captain-settings"));
     fireEvent.click(screen.getByTestId("agent-adapter-codex"));
     fireEvent.click(screen.getByTestId("agent-save"));
     await vi.waitFor(() =>
       expect(onSaveCaptain).toHaveBeenCalledWith({
         adapter: "codex",
-        model: "claude-opus-4-8",
-        effort: "high",
+        model: null,
+        effort: null,
+        fastMode: null,
         permissions: { mode: "auto" },
       }),
     );

@@ -7,6 +7,7 @@
 
 Accepted (2026-09-05).
 Amends [DR-037](037-playbook-12-adoption.md) for runtime floors and [DR-045](045-unified-session-storage.md) for default-store discovery and damage isolation.
+Amended by [DR-053](053-model-options-adoption.md) for dependency floors.
 
 ## Context
 

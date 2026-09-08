@@ -1630,7 +1630,7 @@ test("core-service-71: session.delete removes an ended session and its traces, r
   writeForeignSession(sessionsDir, foreignId, harness.projectDir, foreignTurn("from the terminal"));
   const project = await client.expectOk("project.register", { path: harness.projectDir });
 
-  // An ended session that served an intent, viewed, then disposed.
+  // A settled session that served an intent, with its runtime released.
   const ended = await client.expectOk("session.create", { projectId: project.id });
   await client.expectOk("subscribe", {
     channel: { kind: "session", sessionId: ended.id },
@@ -1645,11 +1645,11 @@ test("core-service-71: session.delete removes an ended session and its traces, r
     intentId: served.id,
   });
   const finished = await client.waitFor(
-    (m) => m.type === "record" && m.record.type === "turn_finished",
+    (m) => m.type === "record" && m.sessionId === ended.id && m.record.type === "turn_finished",
   );
   const turnId = finished.type === "record" ? (finished.record.turnId ?? -1) : -1;
   await client.expectOk("session.viewed", { sessionId: ended.id, turnId });
-  await client.expectOk("session.dispose", { sessionId: ended.id });
+  await client.waitFor((m) => m.type === "session.state" && m.session.id === ended.id && m.session.turns === 1 && !m.session.turnActive && !m.session.live);
   const live = await client.expectOk("session.create", { projectId: project.id });
 
   const sidecar = join(sessionsDir, `${ended.id}.json`);
@@ -1849,7 +1849,7 @@ test("core-service-22/62: opaque v1 records survive native restart and CLI repla
   await client.expectOk("subscribe", { channel: { kind: "session", sessionId: native.id } });
   await client.expectOk("turn.submit", { sessionId: native.id, text: "known native turn" });
   await client.waitFor((message) => message.type === "record" && message.sessionId === native.id && message.record.type === "turn_finished");
-  await client.expectOk("session.dispose", { sessionId: native.id });
+  await client.waitFor((m) => m.type === "session.state" && m.session.id === native.id && m.session.turns === 1 && !m.session.turnActive && !m.session.live);
   const nativeUsage = await client.expectOk("usage.get", { sessionId: native.id });
   client.close();
   await service.stop();
@@ -1981,7 +1981,7 @@ test("core-service-22: damaged native streams remain readable but cannot continu
     await client.expectOk("subscribe", { channel: { kind: "session", sessionId: session.id } });
     await client.expectOk("turn.submit", { sessionId: session.id, text: example.name });
     await client.waitFor((message) => message.type === "record" && message.sessionId === session.id && message.record.type === "turn_finished");
-    await client.expectOk("session.dispose", { sessionId: session.id });
+    await client.waitFor((m) => m.type === "session.state" && m.session.id === session.id && m.session.turns === 1 && !m.session.turnActive && !m.session.live);
     const stream = join(harness.dataDir, "sessions", `${session.id}.records.jsonl`);
     const before = readFileSync(stream, "utf8");
     const records = before.trimEnd().split("\n").map((line) => JSON.parse(line) as StoredRecord);
@@ -2595,8 +2595,7 @@ test("core-service-81: saved Captain, player context and graphs survive removal 
   const project=await client.expectOk("project.register",{path:harness.projectDir});
   const session=await client.expectOk("session.create",{projectId:project.id});
   await client.expectOk("turn.submit",{sessionId:session.id,text:"Retained history"});
-  await client.waitFor((message)=>message.type==="session.state"&&message.session.id===session.id&&message.session.turns===1&&message.session.turnActive===false);
-  await client.expectOk("session.dispose",{sessionId:session.id});
+  await client.waitFor((message)=>message.type==="session.state"&&message.session.id===session.id&&message.session.turns===1&&message.session.turnActive===false&&message.session.live===false);
   const before=await client.expectOk("history.get",{sessionId:session.id});
   const context=before.records.find((entry)=>(entry.record as {type?:string}).type==="session_context")!.record as unknown as {configuration:{captain:{adapter:string};players:{id:string}[]};graphs:{playbookId:string;graph:unknown}[]};
   assert.equal(context.configuration.captain.adapter,"claude");

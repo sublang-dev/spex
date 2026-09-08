@@ -20,7 +20,6 @@ and `npm start` (desktop) or `npm run start:server` (server).
   effort and fast-mode options, canonical IDs recognized through aliases,
   explicit custom pins, and refresh. Adapter efforts supplement model lists
   only where Cligent's discovery interface cannot report them.
-  Registry delivery awaits the dependency releases tracked in IR-076.
 - Every message in the Captain thread — yours, the Captain's, and a
   player's question — carries its clock time at the bubble's outer
   foot, quiet and tabular, with the exact date and time on hover; the
@@ -28,6 +27,12 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Changed
 
+- New issue intents request work on a new branch, relevant checks, and a PR
+  whose description closes the issue when the Boss merges it.
+- Require Cligent 0.26 and Playbook 13.1 from the public registry.
+  Clarification replies identify the player as the questioner, avoid
+  repeating its question on resume, and retain task context for a fresh
+  provider session.
 - Refresh the app's SDK runtimes to Claude Code 2.1.263 and Codex 0.153.4.
 - **Nothing ends.** The runtime is held only for a turn: a session's
   agents and its Playbook lease are released when a turn settles and
@@ -53,6 +58,8 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Fixed
 
+- Keep agent and binding popovers inside the window as their options load
+  or change.
 - Preserve role tuning and comments when editing bindings, including an
   explicit fast-mode Off override.
 - A player's failure shows once per call: an adapter that says the
