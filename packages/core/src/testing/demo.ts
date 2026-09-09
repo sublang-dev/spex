@@ -205,7 +205,10 @@ export function demoAdapterImports(options: { delayMs?: number } = {}) {
  * the reply turn and must still know the park it is leaving. */
 const parkedSessions = new Set<string>();
 
-export function demoCaptain(sessionId?: string): Captain {
+export function demoCaptain(
+  sessionId?: string,
+  options: { governedCompletion?: boolean } = {},
+): Captain {
   // The runtime leaves a park with one transition on the Boss reply
   // (BOSS_REPLY from awaitBossReply); the narration mirrors it so the
   // folds that answer a question on that departure see what a real
@@ -261,7 +264,7 @@ export function demoCaptain(sessionId?: string): Captain {
           sessionId: runId,
           playbookId: "code",
           rootSessionId: runId,
-          depth: 1,
+          depth: options.governedCompletion ? 0 : 1,
           sequence,
           timestamp: Date.now(),
           type,
@@ -321,7 +324,7 @@ export function demoCaptain(sessionId?: string): Captain {
           playbookId: "review",
           rootSessionId: runId,
           parentSessionId: runId,
-          depth: 2,
+          depth: options.governedCompletion ? 1 : 2,
           sequence: reviewSequence,
           timestamp: Date.now(),
           type,
@@ -372,6 +375,14 @@ export function demoCaptain(sessionId?: string): Captain {
     });
     await move("reviewFirstCommit", "done", "done", "done");
     await trace("status.emitted", { message: "settled", stateId: "done" });
+    // Opt in only for journeys exercising advancement from a typed
+    // governed result; the ordinary demo remains narration alone.
+    if (options.governedCompletion) {
+      await trace("boss.input.settled", {
+        outcome: "terminal",
+        terminal: { kind: "success" },
+      });
+    }
     await trace("session.disposed", {
       state: { value: "done", status: "done" },
     });

@@ -29,6 +29,10 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Changed
 
+- Successful playbook completion starts the next unblocked intent in the
+  project's queue while keeping the finished intent's Confirm reminder.
+  Questions, failures, and replies without explicit completion pause the
+  queue; explicit after-links still wait for a human verdict.
 - New issue intents request work on a new branch, relevant checks, and a PR
   whose description closes the issue when the Boss merges it.
 - Require Cligent 0.26 and Playbook 13.1 from the public registry.

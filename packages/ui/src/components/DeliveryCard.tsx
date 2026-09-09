@@ -104,6 +104,7 @@ export function DeliveryCard({
   derived,
   closed,
   live,
+  ownsConversation,
   next,
   onClose,
   onStartNext,
@@ -116,6 +117,8 @@ export function DeliveryCard({
   closed: boolean;
   /** False in an ended session's replay: the card renders inert. */
   live: boolean;
+  /** Only the latest dispatch owns subsequent Boss messages. */
+  ownsConversation: boolean;
   /** The project's next queued unblocked intent, for the pull. */
   next?: DerivedIntent;
   onClose(as: "done" | "dropped"): Promise<void>;
@@ -264,9 +267,11 @@ export function DeliveryCard({
         >
           {busy === "dropped" ? "Dropping…" : "Drop"}
         </button>
-        <span className="min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-500">
-          A follow-up message continues this intent.
-        </span>
+        {ownsConversation ? (
+          <span className="min-w-0 truncate text-xs text-neutral-500 dark:text-neutral-500">
+            A follow-up message continues this intent.
+          </span>
+        ) : null}
       </div>
     </div>
   );

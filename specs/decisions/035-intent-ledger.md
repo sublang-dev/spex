@@ -14,6 +14,8 @@ Amended (2026-09-02): the permanent deletion deferred below is decided — a rem
 Amended by [DR-051](051-runtime-held-for-a-turn.md): the lane Start reuses is the project's current conversation — derived from stored state — and the fresh lane is the start tab, since no session is ended any more.
 Amended by [DR-054](054-issue-intent-delivery.md): issue capture seeds include verification and PR delivery instructions, with issue closure on merge.
 
+Amended by [DR-055](055-queue-advancement.md): proven successful queued work advances automatically without a verdict; human confirmations and explicit after-link gates remain.
+
 ## Context
 
 - The owner's direction (2026-08-28): managing multiple agents across several projects loses the thread — what are the agents working on and in which sessions, what is recently done or awaits confirmation, what is blocked, and what comes next, without rediscovering the answer after every finish.

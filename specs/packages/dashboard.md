@@ -69,7 +69,7 @@ The Dashboard shall publish an attention count equal to the number of entries in
 
 #### dashboard-50
 
-While a project's live session holds a turn in flight and no attention entry stands for that session [[dashboard-1](#dashboard-1)], the Dashboard shall list that session in a Running band between the attention queue and the project groups, one row per session in the projects' fixed sidebar order:
+While a project's live session holds a turn in flight and no attention entry for its current work stands [[dashboard-1](#dashboard-1)], the Dashboard shall list that session in a Running band between the attention queue and the project groups, one row per session in the projects' fixed sidebar order:
 
 | Row part | Content |
 | --- | --- |
@@ -78,7 +78,7 @@ While a project's live session holds a turn in flight and no attention entry sta
 | Doing | its human-readable engagement state label in the Now band's vocabulary [[dashboard-28](#dashboard-28)] — "deciding" or "working" while a turn is active with no leaf state — with the running player named beside it and the turn's elapsed span |
 
 - activating a row opens that session;
-- an attention entry arriving for the session takes its row out of the band, the summons standing in the queue instead [[dashboard-1](#dashboard-1)], and the turn ending takes it out too [[dashboard-4](#dashboard-4)];
+- an attention entry for the current work takes its row out of the band, the summons standing in the queue instead [[dashboard-1](#dashboard-1)], and the turn ending takes it out too [[dashboard-4](#dashboard-4)]; an older intent awaiting its verdict keeps its attention entry without hiding the newer running intent ([DR-055](../decisions/055-queue-advancement.md));
 - the project filter hides the other projects' rows, changing nothing derived [[dashboard-32](#dashboard-32)];
 - the band keeps its place while empty, carrying its note there [[dashboard-8](#dashboard-8)].
 
@@ -405,6 +405,7 @@ Where the browser journey harness ([DR-039](../decisions/039-browser-acceptance-
 Where the browser journey harness ([DR-039](../decisions/039-browser-acceptance-journeys.md)) boots the served shell with the demo project registered and the scripted Captain holding each call long enough for a turn to be watched, when the journey sends a task and shows the Dashboard, the test suite shall assert the Running band through the page:
 
 - while the turn is in flight, the band lists one row naming the session's project, its title, and what it is doing [[dashboard-50](#dashboard-50)];
+- an older intent awaiting confirmation in the same session retains its attention entry while the newer intent runs in this band [[dashboard-50](#dashboard-50)];
 - activating that row opens the session [[dashboard-50](#dashboard-50)];
 - once the turn ends, no row stands in the band, which reads its note in place [[dashboard-50](#dashboard-50)] [[dashboard-8](#dashboard-8)].
 

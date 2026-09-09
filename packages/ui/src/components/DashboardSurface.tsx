@@ -318,12 +318,17 @@ export function DashboardSurface({
     (entry) =>
       projectFilter === "all" || entry.projectId === projectFilter,
   );
-  // The band is the queue's complement (dashboard-50): a session the
-  // fold already summons belongs to the queue, never to both. The
-  // exclusion reads the unfiltered set, so a filter hides rows and
-  // moves nothing.
+  // Only an interruption of the current work replaces its running
+  // row (dashboard-50). Earlier deliveries can still owe a verdict
+  // while a later intent runs in the same conversation. Read the
+  // unfiltered set so a project filter changes visibility alone.
   const summoned = new Set(
-    (ledger?.attention ?? []).map((entry) => entry.sessionId),
+    (ledger?.attention ?? [])
+      .filter((entry) =>
+        entry.band === "interrupted" &&
+        (entry.turnId === undefined || entry.turnId === views[entry.sessionId]?.currentTurnId),
+      )
+      .map((entry) => entry.sessionId),
   );
   const running = filtered.flatMap((project) =>
     sessions.filter(

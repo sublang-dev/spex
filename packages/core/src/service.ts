@@ -51,8 +51,9 @@ import {
   type ErrorCode,
   type ReadinessEntry,
   type ServerMessage,
+  type StoredRecord,
 } from "./protocol.js";
-import { CoreError, SessionManager, type CaptainFactory, type RecordEnvelope } from "./session.js";
+import { CoreError, SessionManager, currentSession, type CaptainFactory, type RecordEnvelope } from "./session.js";
 import { closedStats, foldLedger, intentTitle, wasWorked } from "./ledger.js";
 import { rankBetween } from "./rank.js";
 import { Store } from "./store.js";
@@ -153,6 +154,31 @@ export interface CoreServiceOptions {
 // The Sources cache ages out at ten minutes (dashboard-14).
 const FORGE_CACHE_MS = 600_000;
 
+/** A finished Boss turn can be a clarification. Only the governed
+ * root's typed successful terminal result authorizes queue advancement. */
+function completedRoot(records: StoredRecord[], turnId: number): boolean {
+  let completed = false;
+  for (const {record} of records) {
+    if (record.type !== "captain_telemetry" || record.turnId !== turnId) continue;
+    const telemetry = record as {topic?: string; payload?: unknown};
+    if (telemetry.topic !== "playbook.trace") continue;
+    const trace = telemetry.payload as {
+      playbookId?: unknown; sessionId?: unknown; rootSessionId?: unknown;
+      parentSessionId?: unknown; depth?: unknown; type?: unknown;
+      payload?: {outcome?: unknown; terminal?: {kind?: unknown}};
+    } | undefined;
+    if (!trace || typeof trace.playbookId !== "string" || trace.playbookId === "captain" ||
+        typeof trace.sessionId !== "string" || trace.sessionId !== trace.rootSessionId ||
+        trace.depth !== 0 || trace.parentSessionId !== undefined) continue;
+    if (trace.type === "boss.input.settled") {
+      completed = trace.payload?.outcome === "terminal" && trace.payload.terminal?.kind === "success";
+    } else if (trace.type === "boss.input.received" || trace.type === "session.started") {
+      completed = false;
+    }
+  }
+  return completed;
+}
+
 interface ClientState {
   socket: WebSocket;
   channels: Set<string>;
@@ -210,6 +236,11 @@ export class CoreService {
   /** The reload in flight, awaited before a runtime opens (core-service-92). */
   private reloading?: Promise<void>;
   private readonly migrationDiagnostics: {file: string; reason: string; blocking: boolean}[] = [];
+  private stopping = false;
+  /** Tracked so shutdown cannot race an automatic continuation opening. */
+  private readonly advancing = new Set<Promise<void>>();
+  /** Manual and automatic sends share one admission per conversation. */
+  private readonly submitting = new Map<string, Promise<void>>();
 
   private constructor(options: CoreServiceOptions) {
     this.options = options;
@@ -247,6 +278,16 @@ export class CoreService {
     };
     this.sessions.onLedgerChange = (projectId) => {
       this.queueLedgerChange([projectId]);
+    };
+    this.sessions.onTurnSettled = (sessionId, turnId, intentId) => {
+      if (this.stopping || intentId === undefined) return;
+      const work = this.advanceQueue(sessionId, turnId, intentId).catch((error) => {
+        // Admission can require human repair (settings, ownership or
+        // recovery). Keep the next intent queued; never retry silently.
+        console.error(`spex: queue advancement paused: ${String(error)}`);
+      });
+      this.advancing.add(work);
+      void work.finally(() => this.advancing.delete(work));
     };
   }
 
@@ -477,6 +518,7 @@ export class CoreService {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     this.watcher?.close();
     this.sessionsWatcher?.close();
     if (this.reloadTimer) clearTimeout(this.reloadTimer);
@@ -489,6 +531,7 @@ export class CoreService {
     // (CORE-39): finish the shutdown, then report it to the host.
     let failure: { error: unknown } | undefined;
     try {
+      await Promise.all(this.advancing);
       await this.sessions.disposeAll();
     } catch (error) {
       failure = { error };
@@ -921,46 +964,30 @@ export class CoreService {
         return null;
       }
       case "turn.submit": {
-        if (command.intentId !== undefined) {
-          const intent = this.requireOpenIntent(command.intentId);
-          const session = this.store.describeSession(command.sessionId);
-          if (!session || session.projectId !== intent.projectId) {
-            throw new CoreError(
-              "invalid_request",
-              "the intent belongs to another project",
-            );
+        const release = this.admitSubmission(command.sessionId);
+        try {
+          await this.sessions.settled(command.sessionId);
+          if (command.intentId !== undefined) {
+            this.validateIntentDispatch(command.sessionId, command.intentId);
           }
-          if (this.deriveIntentState(intent.id) !== "queued") {
-            throw new CoreError(
-              "conflict",
-              "the intent is already dispatched",
-            );
+          // The runtime is held only for a turn (DR-051): a message to a
+          // session that is not live opens it first — on the settings the
+          // file holds now — then the turn as usual. A turn still settling
+          // is waited out, so the message never reaches a closing host.
+          if (!this.sessions.getLive(command.sessionId)) {
+            await this.settledConfig();
+            await this.continueSession(command.sessionId);
           }
-          const predecessor = intent.afterId
-            ? this.store.getIntent(intent.afterId)
-            : undefined;
-          if (predecessor && predecessor.closedAt === undefined) {
-            throw new CoreError(
-              "conflict",
-              `the intent waits on "${intentTitle(predecessor)}"`,
-            );
+          if (command.intentId !== undefined) {
+            this.validateIntentDispatch(command.sessionId, command.intentId);
           }
-        }
-        // The runtime is held only for a turn (DR-051): a message to a
-        // session that is not live opens it first — on the settings the
-        // file holds now — then the turn as usual. A turn still settling
-        // is waited out, so the message never reaches a closing host.
-        await this.sessions.settled(command.sessionId);
-        if (!this.sessions.getLive(command.sessionId)) {
-          await this.settledConfig();
-          await this.continueSession(command.sessionId);
-        }
-        this.sessions.submitTurn(
-          command.sessionId,
-          command.text,
-          command.intentId,
-        );
-        return { accepted: true };
+          this.sessions.submitTurn(
+            command.sessionId,
+            command.text,
+            command.intentId,
+          );
+          return { accepted: true };
+        } finally { release(); }
       }
       case "turn.abort":
         return { aborted: this.sessions.abortTurn(command.sessionId) };
@@ -1383,6 +1410,88 @@ export class CoreService {
         }
         return null;
       }
+    }
+  }
+
+  /** Starting an intent authorizes its same-project successors, not a
+   * verdict on its delivery. Reads, captures and confirmations never
+   * call this path; only locally handled turn settlement does (DR-055). */
+  private async advanceQueue(sessionId: string, turnId: number, intentId: string): Promise<void> {
+    // Let an already-admitted manual send finish. If it starts a new
+    // turn, the original completion is stale; if it is refused, the
+    // completed queue intent can still advance normally.
+    while (this.submitting.has(sessionId)) await this.submitting.get(sessionId);
+    const release = this.admitSubmission(sessionId);
+    let opened = false;
+    let submitted = false;
+    try {
+      const session = this.store.describeSession(sessionId);
+      if (!session) return;
+      const next = (opened = false) => {
+        if (this.stopping) return;
+        const sessions = this.sessions.listSessions();
+        const current = currentSession(sessions, session.projectId);
+        if (current?.id !== sessionId || current.turnActive || current.recovery || current.externalWriter) return;
+        if (this.sessions.getLive(sessionId) ? !opened : !current.continuable) return;
+        const lastTurn = this.store.listTurns(sessionId).at(-1);
+        if (lastTurn?.turnId !== turnId || lastTurn.status !== "finished") return;
+        const dispatch = this.store.listSessionDispatches(sessionId).at(-1);
+        if (!dispatch || dispatch.intentId !== intentId || dispatch.turnId > turnId) return;
+        const ledger = this.ledger();
+        const owner = this.store.getIntent(dispatch.intentId);
+        // A prompt after a verdict is plain chat. A verdict during this
+        // turn's settlement, however, must not cancel its successor.
+        const confirmed = owner?.closedAs === "done";
+        if ((!confirmed && !ledger.intents.some((entry) => entry.intent.id === dispatch.intentId && entry.state === "finished")) ||
+            ledger.attention.some((entry) => entry.sessionId === sessionId && entry.band === "interrupted") ||
+            !completedRoot(this.store.getRecords(sessionId), turnId)) return;
+        return ledger.intents.find((entry) => entry.intent.projectId === session.projectId &&
+          entry.state === "queued" && !entry.blockedBy)?.intent;
+      };
+      if (!next()) return;
+      await this.settledConfig();
+      if (!next()) return;
+      await this.continueSession(sessionId);
+      opened = true;
+      // Opening is asynchronous. Re-read the queue and dispatch boundary
+      // before sending, so edits and competing manual sends win honestly.
+      if (this.stopping) return;
+      const intent = next(true);
+      if (intent) {
+        this.validateIntentDispatch(sessionId, intent.id);
+        this.sessions.submitTurn(sessionId, intent.text, intent.id);
+        submitted = true;
+      }
+    } finally {
+      // A queue changed during opening may have nothing left to send.
+      // Release that idle runtime while competing sends remain excluded.
+      try {
+        if (opened && !submitted && this.sessions.getLive(sessionId)) {
+          await this.sessions.disposeSession(sessionId);
+        }
+      } finally { release(); }
+    }
+  }
+
+  private admitSubmission(sessionId: string): () => void {
+    if (this.submitting.has(sessionId)) throw new CoreError("busy", "a turn is being submitted in this session");
+    let settled!: () => void;
+    this.submitting.set(sessionId, new Promise<void>((resolve) => { settled = resolve; }));
+    return () => { this.submitting.delete(sessionId); settled(); };
+  }
+
+  private validateIntentDispatch(sessionId: string, intentId: string): void {
+    const intent = this.requireOpenIntent(intentId);
+    const session = this.store.describeSession(sessionId);
+    if (!session || session.projectId !== intent.projectId) {
+      throw new CoreError("invalid_request", "the intent belongs to another project");
+    }
+    if (this.deriveIntentState(intent.id) !== "queued") {
+      throw new CoreError("conflict", "the intent is already dispatched");
+    }
+    const predecessor = intent.afterId ? this.store.getIntent(intent.afterId) : undefined;
+    if (predecessor && predecessor.closedAt === undefined) {
+      throw new CoreError("conflict", `the intent waits on "${intentTitle(predecessor)}"`);
     }
   }
 

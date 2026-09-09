@@ -586,7 +586,7 @@ When a dispatched intent's final turn ends finished, the run view shall render t
 
 - the run-stats line folds from the intent's own turns — its review rounds foremost, omitted when zero, then its turn count and its elapsed time from dispatch to the last turn's end, in the app's one duration vocabulary — so the verdict is informed before the click;
 - the provenance chip with a canonical URL is a link that opens outside the page — a new browsing context, with no referrer — so the session never navigates away, and the same chip is the one the bound turn's bubble wears [[run-view-89](#run-view-89)];
-- the card says visibly that a follow-up message continues the intent;
+- the card says visibly that a follow-up message continues the intent only while it is the newest open dispatched intent owning the conversation [[run-view-90](#run-view-90)]; an automatic successor leaves this card and its verdict controls in place ([DR-055](../decisions/055-queue-advancement.md));
 - when a verdict is given, the card resolves in place into the project's next queued intent with Start, or into an inline add affordance when the queue holds none;
 - in an ended session the card replays identically from the stored fold [[run-view-14](#run-view-14)], its controls inert.
 
@@ -832,6 +832,7 @@ Where a replayed fixture stream dispatches a queued intent whose turn then ends 
 - while the intent is open, the working line above the composer names it [[run-view-90](#run-view-90)];
 - Drop on the working line asks the inline confirm — Keep leaves the intent open with focus back on the control; Drop sends the close command as dropped, the line leaves with the outcome announced where it stood and focus in the composer; a refused drop keeps the line and names the refusal [[run-view-113](#run-view-113)];
 - the delivery card at the final turn's end carries the intent's title, its provenance chip, its review rounds, turn count, and elapsed time, a primary Confirm with Drop beside, and the visible follow-up note [[run-view-87](#run-view-87)];
+- while an automatic successor runs, the earlier card retains Confirm and Drop, loses its follow-up note, and confirming it neither starts another turn nor changes the successor's attribution [[run-view-87](#run-view-87)];
 - giving a verdict sends a close command over the protocol and resolves the card in place into the project's next queued intent with Start [[run-view-87](#run-view-87)];
 - with an empty fixture queue, the card resolves into the inline add affordance instead [[run-view-87](#run-view-87)];
 - replaying the same stream as an ended session renders the identical card with its controls inert [[run-view-87](#run-view-87)] [[run-view-14](#run-view-14)].

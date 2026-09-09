@@ -256,13 +256,24 @@ While an intent is closed [[core-service-46](#core-service-46)], when a client s
 
 #### core-service-47
 
-While a session is live, when a client's Boss submission for it [[core-service-5](#core-service-5)] carries an intent id, the core service shall validate the intent at submission — open, of the session's project, queued, and unblocked [[core-service-45](#core-service-45)] — and stamp the dispatch (session, turn, and time) onto the intent when and only when the submitted turn starts, announcing the write [[core-service-51](#core-service-51)] ([DR-035](../decisions/035-intent-ledger.md)):
+While a session is live, when a Boss submission for it — from a client [[core-service-5](#core-service-5)] or automatic advancement [[core-service-94](#core-service-94)] — carries an intent id, the core service shall validate the intent at submission — open, of the session's project, queued, and unblocked [[core-service-45](#core-service-45)] — and stamp the dispatch (session, turn, and time) onto the intent when and only when the submitted turn starts, announcing the write [[core-service-51](#core-service-51)] ([DR-035](../decisions/035-intent-ledger.md)):
 
 - a submission whose intent fails validation is rejected and starts no turn;
 - a submission that never starts a turn stamps nothing, and the intent stays queued;
 - a later dispatch of the same intent re-writes the stamps;
 - the stamp attributes turns: an intent's turns run from its dispatch turn up to, not including, the next turn in the session that is another intent's dispatch turn, so the newest dispatched open intent owns follow-up turns;
 - an intent is queued while it is open and holds no standing dispatch — never dispatched, its dispatch turn ended aborted, or its dispatching session stopped before that turn finished — the release derived, never written: the stamps remain and the queue position keeps its rank.
+
+#### core-service-94
+
+When a locally owned intent-attributed turn completes full settlement [[core-service-91](#core-service-91)], the core service shall automatically submit the project's first queued, unblocked intent in current rank order into the same conversation only when the settled turn proves successful governed-root completion ([DR-055](../decisions/055-queue-advancement.md)):
+
+- proof is a stored `captain_telemetry` record on `playbook.trace` in that turn, whose trace is `boss.input.settled` with `outcome: terminal` and `terminal.kind: success`, from a non-Captain root (`depth: 0`, `sessionId` equal to `rootSessionId`, no parent session), with no later unfinished governed work or standing interruption;
+- child completion, ordinary Captain replies, missing terminal evidence, failure, abort, questions and permissions do not prove success;
+- selection and submission use the intent's current text, identity and rank, retaining explicit after-link blocking [[core-service-45](#core-service-45)], normal admission [[core-service-5](#core-service-5)], and actual-start dispatch stamping and attribution [[core-service-47](#core-service-47)]; a refused admission causes no automatic retry;
+- the settled intent remains finished and awaiting its human verdict [[core-service-46](#core-service-46)] [[core-service-49](#core-service-49)], and a manual follow-up attributed to it may supply the successful settlement;
+- each eligible settlement initiates at most one next dispatch, only while the conversation and attributed turn remain current; no next eligible intent starts nothing;
+- queue capture or edits, ledger reads, confirmation, adoption and restart initiate no advancement, and no runner state is retained.
 
 #### core-service-48
 
@@ -655,6 +666,16 @@ Where a session is live on the fake adapter, the test suite shall submit Boss te
 - a submission carrying the id of a blocked intent, or of another project's intent, is rejected and starts no turn;
 - a submission rejected busy while a turn is active [[core-service-5](#core-service-5)] stamps nothing and leaves the intent queued;
 - a dispatch turn that is aborted [[core-service-6](#core-service-6)] keeps its stamps while the next `ledger.get` re-derives the intent as queued at its kept rank [[core-service-49](#core-service-49)].
+
+#### core-service-95
+
+Where the integration suite starts intent-attributed work through real core commands with substitute agents, it shall verify automatic advancement [[core-service-94](#core-service-94)] across the following settlement cases:
+
+- successful governed-root completion starts the next unblocked intent exactly once after release and publication, using its latest queued text and rank, while the first remains finished and unconfirmed;
+- a child success, ordinary Captain response, missing completion evidence, failed root, aborted turn or standing question or permission starts no successor; a later manual follow-up with proven root success can advance;
+- an explicit after-link to the unconfirmed predecessor remains blocked, and a competing manual submission or admission refusal creates no duplicate turn or dispatch stamp;
+- adding or editing queued work during the active turn affects the next selection, while capture or edits after settlement, ledger reads, confirmation, adoption and restart start no work;
+- subsequent dispatch bounds the first intent's attribution, and confirming that first intent changes neither the second intent nor its active turn.
 
 #### core-service-58
 

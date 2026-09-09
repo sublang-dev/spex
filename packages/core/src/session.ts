@@ -53,6 +53,8 @@ interface LiveSession {
   seq: number;
   turnActive: boolean;
   pendingIntentId?: string;
+  /** Ownership at this turn's start, before a possible human verdict. */
+  turnIntentId?: string;
   operation?: Promise<void>;
 }
 
@@ -179,6 +181,8 @@ export class SessionManager {
   onRecord: (envelope: RecordEnvelope) => void = () => {};
   onSessionState: (session: SessionInfo) => void = () => {};
   onLedgerChange: (projectId: string) => void = () => {};
+  /** Local turn completion, after release and the durable read model agree. */
+  onTurnSettled: (sessionId: string, turnId: number, intentId?: string) => void = () => {};
 
   constructor(private readonly options: SessionManagerOptions) {
     this.store = options.store;
@@ -357,6 +361,10 @@ export class SessionManager {
       this.store.stampIntentDispatch(live.pendingIntentId, sessionId, turn.id, record.timestamp);
       live.pendingIntentId = undefined;
     }
+    if (record.type === "turn_started" && live) {
+      const owner = this.store.listSessionDispatches(sessionId).at(-1);
+      live.turnIntentId = owner?.open ? owner.intentId : undefined;
+    }
     this.onRecord({sessionId, seq: entry.seq, record, hidden: entry.record.visibility === "hidden", ...(entry.role ? {role:entry.role} : {})});
     if (live) {
       this.publish(sessionId);
@@ -380,6 +388,8 @@ export class SessionManager {
   }
 
   private startTurn(entry: LiveSession, text: string | undefined, retry: boolean): void {
+    const owner = this.store.listSessionDispatches(entry.info.id).at(-1);
+    entry.turnIntentId = retry && owner?.open ? owner.intentId : undefined;
     entry.turnActive = true;
     this.publish(entry.info.id);
     entry.operation = (async () => {
@@ -394,6 +404,8 @@ export class SessionManager {
       } finally {
         entry.turnActive = false;
         entry.pendingIntentId = undefined;
+        const turnId = this.store.listTurns(entry.info.id).at(-1)?.turnId;
+        const intentId = entry.turnIntentId;
         // Register before cleanup starts, including the failed/aborted
         // path, and keep the barrier after cleanup removes the runtime.
         const done = Promise.resolve().then(async () => {
@@ -410,6 +422,7 @@ export class SessionManager {
         this.settling.set(entry.info.id, {projectId: entry.info.projectId, done});
         try { await done; }
         finally { this.settling.delete(entry.info.id); }
+        if (!failed && turnId !== undefined) this.onTurnSettled(entry.info.id, turnId, intentId);
       }
     })().catch((error) => console.error(`spex: session state refresh failed: ${String(error)}`));
   }

@@ -192,6 +192,39 @@ beforeEach(() => {
 });
 
 describe("run-view-70: the sidebar navigates, the tabs hold what is open", () => {
+  test.each(["loaded transcript", "session summary"])("an earlier delivery stays counted without marking later work as waiting for a reply (%s)", async (source) => {
+    render(<App />);
+    await act(async () => {});
+    const working = view();
+    working.turnActive = true;
+    working.currentTurnId = 2;
+    act(() => useAppStore.setState({
+      views: source === "session summary" ? {} : { ...useAppStore.getState().views, "a-live": working },
+      sessions: SESSIONS.map((session) => source === "session summary" && session.id === "a-live"
+        ? { ...session, turnActive: true } : session),
+      ledger: {
+        intents: [],
+        attention: [{
+          band: "finished",
+          kind: "finish",
+          intentId: "i-first",
+          title: "The earlier delivery",
+          projectId: "p1",
+          sessionId: "a-live",
+          turnId: 1,
+          since: NOW - 60_000,
+        }],
+        badge: 1,
+      },
+    }));
+    expect(screen.getByTestId("nav-attention-badge").textContent).toBe("1");
+    expect(screen.getByTestId("sidebar-mark-a-live").dataset.life).toBe("running");
+    expect(screen.getByTestId("sidebar-session-a-live").getAttribute("aria-label"))
+      .not.toContain("waiting for your reply");
+    expect(screen.getByRole("tab", { name: /^harden the session refresh/ }).getAttribute("aria-label"))
+      .not.toContain("needs your reply");
+  });
+
   test("rows read as conversations, attention first, history quiet", () => {
     render(<App />);
 

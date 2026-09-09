@@ -61,15 +61,20 @@ declare global {
 function useLedgerAttention(): Map<string, AttentionItem> {
   const ledger = useAppStore((state) => state.ledger);
   const sessions = useAppStore((state) => state.sessions);
+  const views = useAppStore((state) => state.views);
   return useMemo(() => {
     const map = new Map<string, AttentionItem>();
     for (const entry of ledger?.attention ?? []) {
+      const view = views[entry.sessionId];
+      const session = sessions.find((s) => s.id === entry.sessionId);
+      // An earlier delivery still counts on the Dashboard, but does
+      // not mean the later work is waiting for a reply.
+      if (entry.band === "finished" && (session?.turnActive ?? view?.turnActive)) continue;
       const kind = entry.kind === "failure" ? "failure" : "question";
       const existing = map.get(entry.sessionId);
       if (existing && (existing.kind === "failure" || kind !== "failure")) {
         continue;
       }
-      const session = sessions.find((s) => s.id === entry.sessionId);
       map.set(entry.sessionId, {
         kind,
         sessionId: entry.sessionId,
@@ -78,7 +83,7 @@ function useLedgerAttention(): Map<string, AttentionItem> {
       });
     }
     return map;
-  }, [ledger, sessions]);
+  }, [ledger, sessions, views]);
 }
 
 /** How long a first boot may dial before the page raises the alarm:

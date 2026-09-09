@@ -1261,6 +1261,48 @@ describe("dashboard-50: the Running band lists what is working", () => {
     expect(onOpenSession).toHaveBeenCalledWith("s-run");
   });
 
+  test("an earlier delivery keeps Confirm while later work runs, until that work needs attention", () => {
+    const view = inFlight("dev.coder");
+    view.currentTurnId = 2;
+    view.captain[0].turnId = 2;
+    const delivery: AttentionEntry = {
+      band: "finished",
+      kind: "finish",
+      intentId: "i-first",
+      title: "The first delivery",
+      projectId: "p1",
+      sessionId: "s-run",
+      turnId: 1,
+      since: NOW - MIN,
+    };
+    seed({
+      sessions: [live("s-run", "p1", "The shared conversation")],
+      views: { "s-run": view },
+      ledger: { intents: [], attention: [delivery], badge: 1 },
+    });
+    renderSurface();
+    expect(screen.getByTestId("running-session-s-run")).toBeTruthy();
+    expect((screen.getByTestId("attention-confirm-i-first") as HTMLButtonElement).disabled).toBe(false);
+
+    act(() => useAppStore.setState({
+      ledger: {
+        intents: [],
+        attention: [delivery, {
+          ...delivery,
+          intentId: "i-next",
+          title: "The later work",
+          band: "interrupted",
+          kind: "question",
+          turnId: 2,
+        }],
+        badge: 2,
+      },
+    }));
+    expect(screen.queryByTestId("running-session-s-run")).toBeNull();
+    expect(screen.getByTestId("attention-i-next-question")).toBeTruthy();
+    expect(screen.getByTestId("attention-confirm-i-first")).toBeTruthy();
+  });
+
   test("nothing running keeps the band in place with its note (dashboard-8)", () => {
     seed({
       sessions: [live("s-idle", "p1", "Yesterday's work")],

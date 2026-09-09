@@ -78,6 +78,8 @@ export interface AppOptions {
   agentDelayMs?: number;
   /** Keep the real Captain journal/recovery; substitute only provider replies. */
   realCaptain?: boolean;
+  /** The scripted root reports typed success, enabling intent advancement. */
+  governedCompletion?: boolean;
   /** Substitute task-free model discovery; never start installed providers. */
   discoverAgentModels?: NonNullable<ServerShellOptions["core"]>["discoverAgentModels"];
 }
@@ -276,7 +278,7 @@ export async function startApp(options: AppOptions = {}): Promise<App> {
             : demoAdapterImports({ delayMs: options.agentDelayMs ?? 400 }).imports,
           adapterRuntime: () => ({ usable: true }),
           discoverAgentModels: options.discoverAgentModels ?? (async (adapter) => fixtureModelDiscovery(adapter)),
-          ...(options.realCaptain ? {} : { captainFactory: async (_composed: unknown, sessionId: string) => demoCaptain(sessionId) }),
+          ...(options.realCaptain ? {} : { captainFactory: async (_composed: unknown, sessionId: string) => demoCaptain(sessionId, { governedCompletion: options.governedCompletion }) }),
           env,
           home,
           ...(options.forge

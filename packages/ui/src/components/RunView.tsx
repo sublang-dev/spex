@@ -304,6 +304,7 @@ export function RunView({
             derived={entry}
             closed={!stillOpen}
             live={!readOnly}
+            ownsConversation={to === Number.POSITIVE_INFINITY}
             next={nextUp}
             onClose={(as) => closeIntent(entry.intent.id, as)}
             onStartNext={(intent) => void stageDispatch(intent)}

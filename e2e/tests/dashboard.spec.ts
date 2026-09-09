@@ -130,6 +130,9 @@ test("dashboard-46: a History record opens in the reader and Back returns to its
   await expect(overviewOpener).toBeFocused();
 });
 
+test.describe("governed intent completion", () => {
+test.use({ appOptions: { project: true, agentDelayMs: 2500, governedCompletion: true } });
+
 test("dashboard-39: capture, start, confirm, and History through the page", async ({
   page,
   app,
@@ -197,19 +200,40 @@ test("dashboard-39: capture, start, confirm, and History through the page", asyn
   await expect(page.getByTestId(`now-session-${app.projectId}`)).toBeVisible();
   await expect(page.getByTestId(/^upnext-row-/)).toHaveCount(1);
 
-  // Finished: the attention entry, its Confirm, then History.
-  const confirm = page.getByTestId(/^attention-confirm-/);
+  // The first delivery still owes a verdict while the queued record
+  // starts automatically in the same conversation.
+  const firstDelivery = page.getByTestId(/^attention-.*-finish$/)
+    .filter({ hasText: "Add a README badge" });
+  const confirm = firstDelivery.getByTestId(/^attention-confirm-/);
   await expect(confirm).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId(/^upnext-row-/)).toHaveCount(0);
+  const running = page.getByTestId(/^running-session-/);
+  await expect(running).toBeVisible();
   await expect(page.getByTestId("nav-attention-badge")).toContainText("1");
+
+  await running.click();
+  await expect(page.getByTestId("working-line")).toContainText(/IR-\d+/);
+  const card = page.getByTestId(/^delivery-card-/)
+    .filter({ hasText: "Add a README badge" });
+  await expect(card.getByTestId("delivery-confirm")).toBeEnabled();
+  await expect(card).not.toContainText("A follow-up message continues this intent.");
+  await page.getByRole("button", { name: /^Dashboard — \d+ need/ }).click();
   await confirm.click();
   await expect(confirm).toHaveCount(0);
-  await expect(page.getByTestId("nav-attention-badge")).toHaveCount(0);
   const history = page.getByTestId(/^history-row-/).filter({ hasText: "Add a README badge" });
   await expect(history).toBeVisible();
   await expect(history).not.toContainText(/dropped/i);
   await expect(group).not.toContainText(/nothing done here yet/i);
-  // The next queued intent moved up, and the all-clear names it.
-  await expect(page.getByTestId("attention-all-clear")).toContainText(/IR-\d+|next up/i);
+
+  // Advancing did not confirm either intent: the second delivery
+  // needs its own verdict after its work ends.
+  const secondConfirm = page.getByTestId(/^attention-confirm-/);
+  await expect(secondConfirm).toBeVisible({ timeout: 20_000 });
+  await secondConfirm.click();
+  await expect(secondConfirm).toHaveCount(0);
+  await expect(page.getByTestId("nav-attention-badge")).toHaveCount(0);
+  await expect(page.getByTestId("attention-all-clear")).toContainText(/all clear/i);
+});
 });
 
 test.describe("the History frame", () => {

@@ -1398,6 +1398,35 @@ describe("run-view-94/87: the delivery card and confirm-pulls-next", () => {
     );
   });
 
+  test("a later dispatch keeps the earlier Confirm without claiming its follow-ups", async () => {
+    const working: DerivedIntent = {
+      ...QUEUED_NEXT,
+      intent: {
+        ...QUEUED_NEXT.intent,
+        dispatched: { sessionId: "s1", turnId: 2, at: 2000 },
+      },
+      state: "working",
+    };
+    seedLedger({ intents: [FINISHED, working], attention: [], badge: 1 });
+    renderRunWith([...TURN_ONE, ...TURN_TWO_QUESTION.slice(0, 2)]);
+
+    const card = screen.getByTestId("delivery-card-i1");
+    expect(card.getAttribute("data-settled")).toBe("0");
+    expect(card.textContent).not.toContain("A follow-up message continues this intent.");
+    expect(screen.getByTestId("working-line").textContent).toContain(working.intent.text);
+    const confirm = within(card).getByTestId("delivery-confirm") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+
+    servedLedger = { intents: [working], attention: [], badge: 0 };
+    fireEvent.click(confirm);
+    await vi.waitFor(() => {
+      expect(command).toHaveBeenCalledWith("intent.close", { intentId: "i1", as: "done" });
+      expect(screen.getByTestId("delivery-card-i1").getAttribute("data-settled")).toBe("1");
+    });
+    expect(screen.getByTestId("working-line").textContent).toContain(working.intent.text);
+    expect(command.mock.calls.some(([type]) => type === "turn.submit")).toBe(false);
+  });
+
   test("a verdict closes over the protocol and resolves into Up next", async () => {
     renderRunWith(TURN_ONE);
     // The verdict re-derives the fold without the closed intent.

@@ -80,6 +80,7 @@ meta.md       The spec of specs
 | [DR-052](decisions/052-runtime-model-options.md) | 052-runtime-model-options.md | Runtime model and tuning choices through Cligent, shared by all agent editors |
 | [DR-053](decisions/053-model-options-adoption.md) | 053-model-options-adoption.md | Published Cligent 0.26 / Playbook 13.1 floors; required discovery export |
 | [DR-054](decisions/054-issue-intent-delivery.md) | 054-issue-intent-delivery.md | Issue seeds end at PR creation; the Boss merges and restores the checkout |
+| [DR-055](decisions/055-queue-advancement.md) | 055-queue-advancement.md | Proven successful queued work advances independently of human confirmation |
 
 ## Packages
 
