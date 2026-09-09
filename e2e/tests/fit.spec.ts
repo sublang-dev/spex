@@ -527,7 +527,16 @@ test("run-view-105: chrome fits at every width, in both sidebar states", async (
 // the queue below the bottom with the page growing behind it. They are
 // measured here at the same widths and heights (run-view-105).
 test.describe("chrome the sweep does not open", () => {
-  test.use({ appOptions: { project: true, agentDelayMs: 120_000 } });
+  let releaseDiscovery: (() => void) | undefined;
+  test.use({ appOptions: {
+    project: true,
+    agentDelayMs: 120_000,
+    discoverAgentModels: async () => {
+      await new Promise<void>((resolve) => { releaseDiscovery = resolve; });
+      return { status: "available", models: [{ id: "fixture-model", name: "Fixture model" }] };
+    },
+  } });
+  test.afterEach(() => releaseDiscovery?.());
 
   test("run-view-105: the home's agent popover and the queue stay in the window", async ({
     page,
@@ -549,33 +558,46 @@ test.describe("chrome the sweep does not open", () => {
         await page.setViewportSize({ width, height });
         await page.getByTestId("captain-settings").click();
         await expect(popover).toBeVisible();
-        const where = `agent popover · ${width}×${height}`;
-        // Discovery can grow the visible editor before ResizeObserver
-        // refits it in the rendering step. Measure the settled result.
-        await expect(async () => {
-          const fitDefects: string[] = [];
-          const box = (await popover.boundingBox())!;
-          if (box.y < -1) fitDefects.push(`${where}: top at ${Math.round(box.y)}`);
-          if (box.y + box.height > height + 1) {
-            fitDefects.push(`${where}: bottom at ${Math.round(box.y + box.height)} of ${height}`);
+        for (const phase of ["on opening", "after discovery"]) {
+          if (phase === "on opening") {
+            await expect(popover).toContainText("Loading model options…");
+          } else {
+            await expect.poll(() => Boolean(releaseDiscovery)).toBe(true);
+            releaseDiscovery!();
+            releaseDiscovery = undefined;
+            await expect(popover).toContainText("Models reported by the installed runtime.");
           }
-          // The adapter picker is the first thing the dialog offers, and
-          // was the first thing to go off the top edge.
-          const adapter = (await page
-            .getByTestId("agent-adapter-claude")
-            .boundingBox())!;
-          if (adapter.y < -1 || adapter.y + adapter.height > height + 1) {
-            fitDefects.push(`${where}: the adapter picker is outside the window`);
-          }
-          const page_ = await page.evaluate(() => [
-            document.documentElement.scrollHeight,
-            document.documentElement.clientHeight,
-          ]);
-          if (page_[0] > page_[1] + 1) {
-            fitDefects.push(`${where}: the page grew to ${page_[0]} of ${page_[1]}`);
-          }
-          expect(fitDefects, fitDefects.join("\n")).toEqual([]);
-        }).toPass();
+          const where = `agent popover · ${width}×${height} · ${phase}`;
+          // Discovery can grow the visible editor before ResizeObserver
+          // refits it. Retain a bounded poll's final failure so the other
+          // viewports and the queue still contribute to the report.
+          await expect(async () => {
+            const fitDefects: string[] = [];
+            const box = (await popover.boundingBox())!;
+            if (box.y < -1) fitDefects.push(`${where}: top at ${Math.round(box.y)}`);
+            if (box.y + box.height > height + 1) {
+              fitDefects.push(`${where}: bottom at ${Math.round(box.y + box.height)} of ${height}`);
+            }
+            // The adapter picker is the first thing the dialog offers, and
+            // was the first thing to go off the top edge.
+            const adapter = (await page
+              .getByTestId("agent-adapter-claude")
+              .boundingBox())!;
+            if (adapter.y < -1 || adapter.y + adapter.height > height + 1) {
+              fitDefects.push(`${where}: the adapter picker is outside the window`);
+            }
+            const page_ = await page.evaluate(() => [
+              document.documentElement.scrollHeight,
+              document.documentElement.clientHeight,
+            ]);
+            if (page_[0] > page_[1] + 1) {
+              fitDefects.push(`${where}: the page grew to ${page_[0]} of ${page_[1]}`);
+            }
+            expect(fitDefects, fitDefects.join("\n")).toEqual([]);
+          }).toPass({ timeout: 2_000 }).catch((cause: unknown) => {
+            defects.push(`${where}: ${cause instanceof Error ? cause.message : String(cause)}`);
+          });
+        }
         await page.keyboard.press("Escape");
         await expect(popover).toHaveCount(0);
       }
