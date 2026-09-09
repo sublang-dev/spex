@@ -5,8 +5,8 @@
 
 ## Status
 
-Review passed and app 0.6.0 publication is authorized.
-The remaining release gates must pass before tagging.
+Completed (2026-09-09).
+App 0.6.0 was published from commit `968f35a` as `app-v0.6.0` after its release gates passed.
 
 ## Intent
 
@@ -16,7 +16,7 @@ Deliver runtime model options and clarification fixes through registry dependenc
 
 - [x] Cligent 0.26.0 and Playbook 13.1.0 published with verified provenance.
 - [x] Spex requires those versions and installs them from its registry lockfile.
-- [ ] App 0.6.0 released after its release gates pass.
+- [x] App 0.6.0 released after its release gates pass.
 
 ## Tasks
 
