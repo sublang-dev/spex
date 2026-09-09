@@ -945,6 +945,41 @@ describe("dashboard-26/29: groups and the queue band", () => {
 // ---------------------------------------------------------------------------
 
 describe("dashboard-28: the Now band reads the live lane", () => {
+  test.each(
+    (["Dashboard", "Overview"] as const).flatMap((surface) =>
+      (["missing", "stale", "player running"] as const).map((transcript) => ({ surface, transcript })),
+    ),
+  )("$surface uses summary activity for the Now label and mark with a $transcript transcript", ({ surface, transcript }) => {
+    const view = initialSessionView([{ id: "dev.coder" }]);
+    view.players["dev.coder"].running = transcript === "player running";
+    const session = {
+      id: "s-live", projectId: "p1", projectPath: "/tmp/alpha",
+      title: "Current work", createdAt: NOW - MIN, live: true,
+      endedAt: null, players: [], initialVisible: [], turns: 2,
+      failed: false, turnActive: true,
+    };
+    seed({
+      sessions: [session],
+      views: transcript === "missing" ? {} : { "s-live": view },
+    });
+    if (surface === "Dashboard") renderSurface();
+    else renderOverview();
+    const row = screen.getByTestId("now-session-p1");
+    expect(within(row).getByText(transcript === "player running" ? "working" : "deciding")).toBeTruthy();
+    expect(row.querySelector('[data-running="true"]')).toBeTruthy();
+
+    // A stale active transcript cannot keep the mark or label running
+    // after the authoritative summary reports the turn finished.
+    act(() => useAppStore.setState({
+      sessions: [{ ...session, turnActive: false }],
+      views: transcript === "missing" ? {} : { "s-live": { ...view, turnActive: true } },
+    }));
+    expect(within(row).queryByText("deciding")).toBeNull();
+    expect(within(row).queryByText("working")).toBeNull();
+    expect(row.querySelector('[data-running="false"]')).toBeTruthy();
+    expect(within(row).getAllByText("idle")).toHaveLength(2);
+  });
+
   test("mark, playbook, state label, served intent, and elapsed", () => {
     const view = initialSessionView([]);
     view.turnActive = true;

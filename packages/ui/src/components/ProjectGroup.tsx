@@ -63,12 +63,12 @@ export function queueOf(
 
 /** What a session is doing, in the one status vocabulary
  * (dashboard-28, dashboard-50, DR-010 §2): the label the Now band
- * shows, read from the session's view — a live turn with no leaf
+ * shows, with activity supplied by the caller — a live turn with no leaf
  * state says "working" while a player runs and "deciding" while the
  * Captain has the floor (run-view-59). */
 export function sessionStatus(
   view: SessionView | undefined,
-  turnActive = view?.turnActive,
+  turnActive: boolean | undefined,
 ): { text: string; tone: StatusTone } {
   return stateLabel(view?.fsmState, {
     pendingQuestion: view?.pendingQuestion !== undefined,
@@ -638,7 +638,8 @@ function NowBand({
       </div>
     );
   }
-  const label = sessionStatus(view);
+  const turnActive = session.turnActive ?? view?.turnActive;
+  const label = sessionStatus(view, turnActive);
   // The open intent this lane serves: the newest open dispatch into
   // the session owns the conversation (dashboard-28/33).
   const served = intents
@@ -697,7 +698,7 @@ function NowBand({
           onClick={() => onOpenSession(session.id)}
           className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 text-left text-sm dark:border-neutral-800 dark:bg-neutral-900"
         >
-          <RunningMark running={view?.turnActive ?? false} />
+          <RunningMark running={turnActive ?? false} />
           {/* The playbook only once a run draws one: "no playbook" says
               nothing a reader can act on (dashboard-28). */}
           {playbook ? (
