@@ -46,7 +46,7 @@ When the user edits a role's binding, the Library shall write which session play
 
 #### playbook-library-43
 
-While the role-binding editor [[playbook-library-4](#playbook-library-4)] stands open, the Library shall keep it inside the box that must show it — the surface's own scroll box — at every width down to the 320-pixel floor ([DR-041](../decisions/041-chrome-that-fits.md)):
+While the role-binding editor [[playbook-library-4](#playbook-library-4)] stands open, the Library shall keep it inside the box that must show it — the surface's own scroll box — at every width down to the 320-pixel floor, refitting whenever the window or the editor's own box resizes ([DR-041](../decisions/041-chrome-that-fits.md)):
 
 - that box bounds the editor's width, and a control late in a wrapping roles row moves the editor along the box's edge rather than past it, so a form surface never scrolls sideways to reach it.
 
@@ -306,7 +306,7 @@ Where the browser journey harness ([DR-039](../decisions/039-browser-acceptance-
 - the State machine stage's state list stays in view with its box scrolled to the bottom [[playbook-library-22](#playbook-library-22)];
 - the open stage's box carries a grip that names the stage, and a drag of it leaves the box taller with the height still standing after a reload [[playbook-library-22](#playbook-library-22)];
 - removing a configured playbook asks for the inline confirm — Remove or Keep [[playbook-library-26](#playbook-library-26)] — then leaves the config without it [[playbook-library-16](#playbook-library-16)];
-- a role's binding editor opened at the 320-pixel viewport floor stands wholly inside the surface's box, which scrolls in neither direction [[playbook-library-43](#playbook-library-43)].
+- a role's binding editor opened at the 320-pixel viewport floor stands wholly inside the surface's box both on opening and after discovery followed by pinning a custom model, with the surface scrolling in neither direction [[playbook-library-43](#playbook-library-43)].
 
 #### playbook-library-47
 

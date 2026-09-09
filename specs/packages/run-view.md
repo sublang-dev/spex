@@ -235,7 +235,7 @@ The run view shall present conversations in instant-messaging form:
 When the user opens the captain identity's editor control (or another agent's editor control elsewhere in the run view), the run view shall show an anchored popover in place — offering the embedded runtime's adapters with their readiness, and editing the agent's model, its adapter's effort vocabulary, and permissions ([DR-019](../decisions/019-inline-agent-configuration.md)) — writing changes as a merge patch through the shared configuration's validated edit path per [DR-009](../decisions/009-at-hand-interaction.md), without leaving the current surface:
 
 - the popover opens on the side of its anchor with the more room and takes at most what the window can show there, scrolling inside that bound, so it never lies past an edge the reader cannot scroll to and never grows the page ([DR-041](../decisions/041-chrome-that-fits.md)) — the Captain home's control sits at the foot of the surface, where the room above and below changes with the window's height;
-- a window resized while the popover is open re-decides its side and its room.
+- the open popover refits whenever the window or its own box resizes; a window resize also re-decides its side and its room.
 
 #### run-view-33
 

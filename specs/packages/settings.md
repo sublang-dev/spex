@@ -153,7 +153,7 @@ The Settings surface shall scroll its sections inside its own box, which fills t
 
 #### settings-33
 
-While the agent editor [[settings-1](#settings-1)] stands open as an anchored popover ([DR-009](../decisions/009-at-hand-interaction.md)), the popover shall lie inside the box that must show it — the nearest box that clips, else the window — at every pane width down to the 320-pixel floor ([DR-041](../decisions/041-chrome-that-fits.md)):
+While the agent editor [[settings-1](#settings-1)] stands open as an anchored popover ([DR-009](../decisions/009-at-hand-interaction.md)), the popover shall lie inside the box that must show it — the nearest box that clips, else the window — at every pane width down to the 320-pixel floor, refitting whenever the window or the popover's own box resizes ([DR-041](../decisions/041-chrome-that-fits.md)):
 
 - that box bounds the popover's width and height, and the editor scrolls its own content when the box is the shorter of the two;
 - an anchor too near an edge for the popover's side moves the popover along that edge instead of past it, because what leaves a pane to the left or above it never becomes scrollable.
@@ -273,7 +273,7 @@ Where the browser journey harness ([DR-039](../decisions/039-browser-acceptance-
 - an edit the fail-closed rules reject is refused with its message shown and the file left unchanged [[settings-2](#settings-2)];
 - the readiness panel lists one entry per adapter the config names [[settings-5](#settings-5)];
 - an edit made to the file on disk from outside the app is reflected on the surface without a reload [[settings-8](#settings-8)];
-- an agent editor opened at a role's control at the 320-pixel viewport floor stands wholly inside its surface's box, leaving the page scrolling in neither direction [[settings-33](#settings-33)].
+- an agent editor opened at a role's control at the 320-pixel viewport floor stands wholly inside its surface's box both on opening and after model discovery grows its content, leaving the page scrolling in neither direction [[settings-33](#settings-33)].
 
 #### settings-30
 

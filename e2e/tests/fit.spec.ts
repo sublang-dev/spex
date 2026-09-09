@@ -550,26 +550,32 @@ test.describe("chrome the sweep does not open", () => {
         await page.getByTestId("captain-settings").click();
         await expect(popover).toBeVisible();
         const where = `agent popover · ${width}×${height}`;
-        const box = (await popover.boundingBox())!;
-        if (box.y < -1) defects.push(`${where}: top at ${Math.round(box.y)}`);
-        if (box.y + box.height > height + 1) {
-          defects.push(`${where}: bottom at ${Math.round(box.y + box.height)} of ${height}`);
-        }
-        // The adapter picker is the first thing the dialog offers, and
-        // was the first thing to go off the top edge.
-        const adapter = (await page
-          .getByTestId("agent-adapter-claude")
-          .boundingBox())!;
-        if (adapter.y < -1 || adapter.y + adapter.height > height + 1) {
-          defects.push(`${where}: the adapter picker is outside the window`);
-        }
-        const page_ = await page.evaluate(() => [
-          document.documentElement.scrollHeight,
-          document.documentElement.clientHeight,
-        ]);
-        if (page_[0] > page_[1] + 1) {
-          defects.push(`${where}: the page grew to ${page_[0]} of ${page_[1]}`);
-        }
+        // Discovery can grow the visible editor before ResizeObserver
+        // refits it in the rendering step. Measure the settled result.
+        await expect(async () => {
+          const fitDefects: string[] = [];
+          const box = (await popover.boundingBox())!;
+          if (box.y < -1) fitDefects.push(`${where}: top at ${Math.round(box.y)}`);
+          if (box.y + box.height > height + 1) {
+            fitDefects.push(`${where}: bottom at ${Math.round(box.y + box.height)} of ${height}`);
+          }
+          // The adapter picker is the first thing the dialog offers, and
+          // was the first thing to go off the top edge.
+          const adapter = (await page
+            .getByTestId("agent-adapter-claude")
+            .boundingBox())!;
+          if (adapter.y < -1 || adapter.y + adapter.height > height + 1) {
+            fitDefects.push(`${where}: the adapter picker is outside the window`);
+          }
+          const page_ = await page.evaluate(() => [
+            document.documentElement.scrollHeight,
+            document.documentElement.clientHeight,
+          ]);
+          if (page_[0] > page_[1] + 1) {
+            fitDefects.push(`${where}: the page grew to ${page_[0]} of ${page_[1]}`);
+          }
+          expect(fitDefects, fitDefects.join("\n")).toEqual([]);
+        }).toPass();
         await page.keyboard.press("Escape");
         await expect(popover).toHaveCount(0);
       }
