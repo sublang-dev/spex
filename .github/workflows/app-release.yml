@@ -68,6 +68,7 @@ jobs:
           cache: npm
 
       - name: Verify version matches tag
+        id: version
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#app-v}"
           for pkg in apps/desktop apps/server; do
@@ -77,6 +78,7 @@ jobs:
               exit 1
             fi
           done
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
 
       - run: npm ci
       - run: npm run build
@@ -119,5 +121,5 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          name: Spex app ${{ github.ref_name }}
+          name: Spex App v${{ steps.version.outputs.version }}
           body_path: /tmp/release-notes.md

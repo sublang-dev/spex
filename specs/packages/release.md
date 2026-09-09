@@ -17,7 +17,7 @@ The project shall follow Semantic Versioning [[1]]: `MAJOR.MINOR.PATCH` where MA
 
 #### release-2
 
-The version in the released package's `package.json` (`packages/cli/package.json`) shall match the git tag (without the `v` prefix):
+The version in the released package's `package.json` (`packages/cli/package.json`) shall match the git tag (without the `cli-v` prefix):
 
 - The release workflow verifies this match before publishing [[release-8](#release-8)].
 
@@ -43,7 +43,7 @@ Changelog entries shall be grouped under these headings (in order): `Added`, `Ch
 
 #### release-7
 
-Releases shall be triggered by pushing a git tag matching the pattern `vMAJOR.MINOR.PATCH` (e.g., `v1.0.0`).
+CLI releases shall be triggered by pushing a git tag matching the pattern `cli-vMAJOR.MINOR.PATCH` (e.g., `cli-v3.1.0`) ([DR-056](../decisions/056-release-naming.md)).
 
 #### release-8
 
@@ -62,7 +62,10 @@ When the release workflow publishes a scoped package, it shall use `--access pub
 
 #### release-11
 
-When the release workflow completes publishing, it shall create a GitHub release with the extracted changelog notes.
+When the release workflow completes publishing, it shall create a GitHub release with the extracted changelog notes and the channel's title ([DR-056](../decisions/056-release-naming.md)):
+
+- CLI: `Spex CLI vMAJOR.MINOR.PATCH`.
+- App: `Spex App vMAJOR.MINOR.PATCH`.
 
 #### release-18
 
@@ -73,10 +76,11 @@ When a release tag is pushed, the release workflow shall confirm the CI workflow
 
 #### release-19
 
-Where the repo hosts multiple release channels ([DR-002](../decisions/002-desktop-app-architecture.md)), release tags shall use disjoint namespaces per channel:
+Where the repo hosts multiple release channels ([DR-002](../decisions/002-desktop-app-architecture.md)), release tags shall use disjoint namespaces per channel ([DR-056](../decisions/056-release-naming.md)):
 
-- tags matching `vMAJOR.MINOR.PATCH` release only the `@sublang/spex` package from `packages/cli`;
+- tags matching `cli-vMAJOR.MINOR.PATCH` release only the `@sublang/spex` package from `packages/cli`;
 - tags matching `app-vMAJOR.MINOR.PATCH` release the app — the desktop and server shells — as source ([DR-040](../decisions/040-source-only-app-releases.md)).
+- historical `vMAJOR.MINOR.PATCH` CLI tags remain valid release-history evidence; published tags and their URLs are preserved when titles are normalized.
 
 ### Package Hygiene
 

@@ -108,10 +108,16 @@ describe("file-history manifest records releases (SCAF-21)", () => {
       })
         .trim()
         .split("\n")
-        // Only version tags are releases; a working tag (a backup
+        // Only CLI version tags are releases; a working tag (a backup
         // before a history rewrite, say) names no released content and
         // must not be read as one.
-        .filter((tag) => /^v\d/.test(tag));
+        .filter((tag) => /^(cli-)?v\d/.test(tag))
+        // Compare versions across the legacy and current namespaces.
+        .sort((a, b) =>
+          a.replace(/^cli-/, "").localeCompare(b.replace(/^cli-/, ""), "en", {
+            numeric: true,
+          }),
+        );
     } catch {
       return; // not a git checkout
     }
