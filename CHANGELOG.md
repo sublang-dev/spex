@@ -14,11 +14,14 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-09
+
 ### Fixed
 
 - Require supported Playbook trace evidence before advancing the intent queue.
 - Keep Running and interrupted attention consistent for sessions whose
-  transcripts have not loaded or are stale.
+  transcripts have not loaded or are stale. A new Boss turn clears the
+  previous question even when it starts another intent.
 - Keep the Now band's state label and activity mark current before its
   session transcript loads or catches up.
 
@@ -354,7 +357,8 @@ and `npm start` (desktop) or `npm run start:server` (server).
   Chromium against a real core with substitute agents, including an
   accessibility scan of every surface in both themes.
 
-[Unreleased]: https://github.com/sublang-ai/spex/compare/app-v0.6.0...HEAD
+[Unreleased]: https://github.com/sublang-ai/spex/compare/app-v0.6.1...HEAD
+[0.6.1]: https://github.com/sublang-ai/spex/compare/app-v0.6.0...app-v0.6.1
 [0.6.0]: https://github.com/sublang-ai/spex/compare/app-v0.5.0...app-v0.6.0
 [0.5.0]: https://github.com/sublang-ai/spex/compare/app-v0.4.0...app-v0.5.0
 [0.4.0]: https://github.com/sublang-ai/spex/compare/app-v0.3.0...app-v0.4.0

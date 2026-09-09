@@ -1,6 +1,6 @@
 {
   "name": "spex-server",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Spex server shell: the GUI served to a remote browser from one port",
   "type": "module",
