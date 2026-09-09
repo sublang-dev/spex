@@ -14,6 +14,8 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-09
+
 ### Added
 
 - Runtime model selection in Settings and role bindings, with model-specific
@@ -340,7 +342,8 @@ and `npm start` (desktop) or `npm run start:server` (server).
   Chromium against a real core with substitute agents, including an
   accessibility scan of every surface in both themes.
 
-[Unreleased]: https://github.com/sublang-ai/spex/compare/app-v0.5.0...HEAD
+[Unreleased]: https://github.com/sublang-ai/spex/compare/app-v0.6.0...HEAD
+[0.6.0]: https://github.com/sublang-ai/spex/compare/app-v0.5.0...app-v0.6.0
 [0.5.0]: https://github.com/sublang-ai/spex/compare/app-v0.4.0...app-v0.5.0
 [0.4.0]: https://github.com/sublang-ai/spex/compare/app-v0.3.0...app-v0.4.0
 [0.3.0]: https://github.com/sublang-ai/spex/compare/app-v0.2.0...app-v0.3.0
