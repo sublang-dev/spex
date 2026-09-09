@@ -1061,6 +1061,96 @@ test("core-service-42..46: intent commands hold position, dedup, link, and close
 // core-service-47/53/57: dispatch stamping over real turns
 // ---------------------------------------------------------------------------
 
+for (const outcome of ["finished", "aborted"] as const) {
+  for (const admission of ["message", "session", "shutdown"] as const) {
+    test(`core-service-77: ${admission} admission waits for ${outcome} release metadata`, {timeout: 15000}, async (t) => {
+      const harness = await startHarness();
+      const client = new Client(harness.service.port());
+      const store = harness.service["store"];
+      const sessions = harness.service["sessions"];
+      const refresh = store.refreshSession.bind(store);
+      let stopping: Promise<void> | undefined;
+      let storeClosed = false;
+      const close = store.close.bind(store);
+      store.close = () => { storeClosed = true; close(); };
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => { release = resolve; });
+      let reached!: () => void;
+      const refreshing = new Promise<void>((resolve) => { reached = resolve; });
+      t.after(async () => {
+        release();
+        store.refreshSession = refresh;
+        client.close();
+        await (stopping ?? harness.service.stop());
+      });
+      await client.open();
+      const project = await client.expectOk("project.register", {path: harness.projectDir});
+      const session = await client.expectOk("session.create", {projectId: project.id});
+      await client.expectOk("subscribe", {channel: {kind: "session", sessionId: session.id}});
+      const intent = await client.expectOk("intent.queue", {projectId: project.id, text: "Next work"});
+      store.refreshSession = async (id, live) => {
+        if (id === session.id && live === false && !sessions.getLive(id)) {
+          store.refreshSession = refresh;
+          reached();
+          await held;
+        }
+        return refresh(id, live);
+      };
+      await client.expectOk("turn.submit", {sessionId: session.id, text: "slow: first"});
+      if (outcome === "aborted") {
+        await client.waitFor((m) => m.type === "record" && m.record.type === "turn_started");
+        await client.expectOk("turn.abort", {sessionId: session.id});
+      }
+      await refreshing;
+      assert.equal(sessions.getLive(session.id), undefined, "the runtime has already been removed");
+
+      // Observe the admission boundary, then round-trip an independent
+      // command while refresh is held; no wall-clock sleep defines the race.
+      let entered!: () => void;
+      const entering = new Promise<void>((resolve) => { entered = resolve; });
+      if (admission === "message") {
+        const settled = sessions.settled.bind(sessions);
+        sessions.settled = async (id) => { entered(); await settled(id); };
+      } else if (admission === "session") {
+        const settled = sessions.projectSettled.bind(sessions);
+        sessions.projectSettled = async (id) => { entered(); await settled(id); };
+      } else {
+        const dispose = sessions.disposeAll.bind(sessions);
+        sessions.disposeAll = async () => { entered(); await dispose(); };
+      }
+      let replied = false;
+      const pending = (admission === "message"
+        ? client.command("turn.submit", {sessionId: session.id, text: "next", intentId: intent.id})
+        : admission === "session"
+          ? client.command("session.create", {projectId: project.id})
+          : (stopping = harness.service.stop()).then(() => ({ok: true as const, result: null}))
+      ).then((reply) => { replied = true; return reply; });
+      await entering;
+      const before = await client.expectOk("ledger.get", {});
+      assert.equal(replied, false, "admission waits through the stored-summary refresh");
+      assert.equal(storeClosed, false, "shutdown cannot close the store during refresh");
+      assert.equal(before.intents.find((entry) => entry.intent.id === intent.id)?.intent.dispatched, undefined);
+      release();
+      const reply = await pending;
+      if (admission === "message" && outcome === "aborted") {
+        assert.ok(!reply.ok && reply.error.code === "invalid_request");
+        assert.match(reply.error.message, /Retry or Discard/);
+      } else {
+        assert.ok(reply.ok, JSON.stringify(reply));
+      }
+      if (admission === "message" && outcome === "finished") {
+        const after = await client.ledgerUntil((ledger) => ledger.intents.find((entry) => entry.intent.id === intent.id)?.state === "finished", "the continued intent to finish");
+        assert.equal(after.intents.find((entry) => entry.intent.id === intent.id)?.intent.dispatched?.turnId, 2);
+        assert.equal(client.messages.filter((m) => m.type === "record" && m.record.type === "turn_started").length, 2);
+      } else if (admission !== "shutdown") {
+        assert.equal(store.getIntent(intent.id)?.dispatched, undefined, "no extra dispatch stamp");
+      } else {
+        assert.equal(storeClosed, true);
+      }
+    });
+  }
+}
+
 test("core-service-57: submission validates the intent, the turn start stamps it, and an abort re-queues it", async () => {
   const harness = await startHarness();
   const client = new Client(harness.service.port());

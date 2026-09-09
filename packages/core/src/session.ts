@@ -54,10 +54,6 @@ interface LiveSession {
   turnActive: boolean;
   pendingIntentId?: string;
   operation?: Promise<void>;
-  /** The turn's settlement, releasing the runtime (core-service-91):
-   * a submission arriving meanwhile waits for it rather than reaching
-   * a closing host. */
-  releasing?: Promise<void>;
 }
 
 /** The members a stored structure names: its playbooks, and its
@@ -174,6 +170,9 @@ export class SessionManager {
   private readonly store: Store;
   private readonly loadModule: LoadModule;
   private readonly live = new Map<string, LiveSession>();
+  // Settlement outlives the runtime: admission must also wait for the
+  // released checkpoint's refreshed metadata and publication.
+  private readonly settling = new Map<string, {projectId: string; done: Promise<void>}>();
   private readonly opening = new Set<string>();
   private readonly recovering = new Set<string>();
   private readonly now: () => number;
@@ -207,13 +206,12 @@ export class SessionManager {
   /** Wait out a settling turn's release, so a caller sees the session
    * either held or released — never in between (core-service-91). */
   async settled(sessionId: string): Promise<void> {
-    const entry = this.live.get(sessionId);
-    if (entry?.releasing) await entry.releasing;
+    await this.settling.get(sessionId)?.done;
   }
   /** Wait out every release in flight across a project's sessions. */
   async projectSettled(projectId: string): Promise<void> {
-    for (const entry of this.live.values()) {
-      if (entry.info.projectId === projectId && entry.releasing) await entry.releasing;
+    for (const entry of this.settling.values()) {
+      if (entry.projectId === projectId) await entry.done;
     }
   }
 
@@ -396,17 +394,22 @@ export class SessionManager {
       } finally {
         entry.turnActive = false;
         entry.pendingIntentId = undefined;
-        if (failed) {
-          try { await entry.controller.dispose(); this.live.delete(entry.info.id); this.store.setLocalSession(entry.info.id, false); }
-          catch (error) { console.error(`spex: session cleanup failed; ownership retained: ${String(error)}`); }
-        } else {
-          entry.releasing = this.releaseAtSettle(entry);
-          await entry.releasing;
-          entry.releasing = undefined;
-        }
-        await this.store.refreshSession(entry.info.id, this.live.has(entry.info.id));
-        this.publish(entry.info.id);
-        this.onLedgerChange(entry.info.projectId);
+        // Register before cleanup starts, including the failed/aborted
+        // path, and keep the barrier after cleanup removes the runtime.
+        const done = Promise.resolve().then(async () => {
+          if (failed) {
+            try { await entry.controller.dispose(); this.live.delete(entry.info.id); this.store.setLocalSession(entry.info.id, false); }
+            catch (error) { console.error(`spex: session cleanup failed; ownership retained: ${String(error)}`); }
+          } else {
+            await this.releaseAtSettle(entry);
+          }
+          await this.store.refreshSession(entry.info.id, this.live.has(entry.info.id));
+          this.publish(entry.info.id);
+          this.onLedgerChange(entry.info.projectId);
+        });
+        this.settling.set(entry.info.id, {projectId: entry.info.projectId, done});
+        try { await done; }
+        finally { this.settling.delete(entry.info.id); }
       }
     })().catch((error) => console.error(`spex: session state refresh failed: ${String(error)}`));
   }
@@ -418,6 +421,10 @@ export class SessionManager {
     return true;
   }
   async disposeSession(sessionId: string): Promise<void> {
+    if (!this.live.has(sessionId) && this.settling.has(sessionId)) {
+      await this.settled(sessionId);
+      return;
+    }
     const entry = this.requireLive(sessionId);
     if (entry.turnActive) entry.runtime.abortActiveTurn();
     await entry.operation;
@@ -431,7 +438,8 @@ export class SessionManager {
     this.onLedgerChange(entry.info.projectId);
   }
   async disposeAll(): Promise<void> {
-    const results = await Promise.allSettled([...this.live.keys()].map((id) => this.disposeSession(id)));
+    const ids = new Set([...this.live.keys(), ...this.settling.keys()]);
+    const results = await Promise.allSettled([...ids].map((id) => this.disposeSession(id)));
     const failures = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (failures.length) throw new AggregateError(failures, "session cleanup failed");
   }

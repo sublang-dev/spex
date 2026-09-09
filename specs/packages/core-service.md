@@ -72,7 +72,7 @@ Where the shared config path is the default one and holds nothing, when the core
 
 Where a project is registered ([DR-006](../decisions/006-projects-and-forge.md)) and the active config is valid, when a client requests a session for that project, the core service shall create a live session whose embedded runtime is initialized with the project directory as its working directory, and shall report the new session to subscribed clients:
 
-- While a session of the project is live — a turn in flight or settling [[core-service-91](#core-service-91)] — or another host holds one, a further session request for the same project is rejected `busy` naming that session, and creates no session ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
+- After waiting for any settlement in progress [[core-service-91](#core-service-91)], while a session of the project remains live or another host holds one, a further session request for the same project is rejected `busy` naming that session, and creates no session ([DR-051](../decisions/051-runtime-held-for-a-turn.md)).
 - Live sessions for distinct projects run concurrently.
 - While a session is live, a client's disposal request aborts its turn, persists the session's Captain snapshot [[core-service-72](#core-service-72)], disposes the session's runtime, and reports the session as no longer live; a Boss message continues it [[core-service-73](#core-service-73)].
 - Where disposal fails, the core reports the error and retains the session's lease and project reservation until cleanup is confirmed; stopping the owning process allows later recovery through the shared lease checks ([DR-048](../decisions/048-failed-session-cleanup.md)).
@@ -83,7 +83,8 @@ When a Boss turn settles on a live session, the core service shall release the s
 
 - a settled checkpoint the core could not continue from disk — unresolved repository effects — keeps its runtime held until a later turn leaves it continuable;
 - a failed or aborted turn releases the runtime as before, the session's recovery state reported [[core-service-32](#core-service-32)];
-- the release preserves the local provider hints written at settlement, so the next open resumes the Captain's and the players' provider conversations where they exist.
+- the release preserves the local provider hints written at settlement, so the next open resumes the Captain's and the players' provider conversations where they exist;
+- session and project admission wait through release and the resulting stored-summary refresh and publication, on successful and failed turns alike.
 
 #### core-service-92
 
@@ -403,6 +404,7 @@ When a host shell stops the core service, the core service shall persist every l
 
 - One session's disposal failure neither skips another session's disposal nor leaves the endpoint or the store open.
 - Successful cleanup reports the session as no longer live; failed cleanup retains its ownership evidence [[core-service-4](#core-service-4)].
+- Shutdown waits for settlement bookkeeping already in progress before closing the store.
 
 ## Internal Behavior
 
@@ -605,7 +607,8 @@ When an integration suite changes stored history and project bindings through a 
 
 When the integration suite settles and restarts a shared-store session, it shall verify that either a desktop- or CLI-created supported checkpoint lists continuable [[core-service-32](#core-service-32)], that its runtime was released at settlement with the provider hints kept [[core-service-91](#core-service-91)], continues with the same identities and stream [[core-service-74](#core-service-74)], and persists recovery without provider tokens [[core-service-72](#core-service-72)]; that a message opens it on the current tuning while an added playbook changes nothing and a structural change is refused naming the field [[core-service-92](#core-service-92)]; and that active leases and turns in flight, history-only recovery, damaged digests, uncertain work, missing bindings and path/config drift shall refuse before a turn or intent stamp [[core-service-73](#core-service-73)]:
 
-- a session parked on a question keeps its summons across the release and answers where it waited [[core-service-93](#core-service-93)].
+- a session parked on a question keeps its summons across the release and answers where it waited [[core-service-93](#core-service-93)];
+- with release-time summary refresh held after runtime disposal, a next-message or new-session request waits for publication before admission [[core-service-91](#core-service-91)], and shutdown keeps the store open until refresh completes [[core-service-39](#core-service-39)]; a successful turn permits continuation, an aborted turn requires recovery, and no waiting message stamps an intent [[core-service-47](#core-service-47)].
 
 #### core-service-63
 

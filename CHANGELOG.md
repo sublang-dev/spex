@@ -58,6 +58,7 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ### Fixed
 
+- Prevent a checkpoint error when a message arrives during turn cleanup.
 - Keep agent and binding popovers inside the window as their options load
   or change.
 - Preserve role tuning and comments when editing bindings, including an
