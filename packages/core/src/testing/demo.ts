@@ -260,7 +260,7 @@ export function demoCaptain(
       await session.emitTelemetry({
         topic: "playbook.trace",
         payload: {
-          schemaVersion: 3,
+          schemaVersion: options.governedCompletion ? 4 : 3,
           sessionId: runId,
           playbookId: "code",
           rootSessionId: runId,
@@ -319,7 +319,7 @@ export function demoCaptain(
       await session.emitTelemetry({
         topic: "playbook.trace",
         payload: {
-          schemaVersion: 3,
+          schemaVersion: options.governedCompletion ? 4 : 3,
           sessionId: reviewId,
           playbookId: "review",
           rootSessionId: runId,
@@ -380,7 +380,9 @@ export function demoCaptain(
     if (options.governedCompletion) {
       await trace("boss.input.settled", {
         outcome: "terminal",
-        terminal: { kind: "success" },
+        stateId: "done",
+        state: { value: "done", activeStateIds: ["done"], tags: [], status: "done", quiescent: true, stateId: "done" },
+        terminal: { kind: "success", stateId: "done" },
       });
     }
     await trace("session.disposed", {

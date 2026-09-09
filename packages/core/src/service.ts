@@ -163,6 +163,7 @@ function completedRoot(records: StoredRecord[], turnId: number): boolean {
     const telemetry = record as {topic?: string; payload?: unknown};
     if (telemetry.topic !== "playbook.trace") continue;
     const trace = telemetry.payload as {
+      schemaVersion?: unknown;
       playbookId?: unknown; sessionId?: unknown; rootSessionId?: unknown;
       parentSessionId?: unknown; depth?: unknown; type?: unknown;
       payload?: {outcome?: unknown; terminal?: {kind?: unknown}};
@@ -170,6 +171,12 @@ function completedRoot(records: StoredRecord[], turnId: number): boolean {
     if (!trace || typeof trace.playbookId !== "string" || trace.playbookId === "captain" ||
         typeof trace.sessionId !== "string" || trace.sessionId !== trace.rootSessionId ||
         trace.depth !== 0 || trace.parentSessionId !== undefined) continue;
+    // Only the supported runtime contract grants completion authority.
+    // Later unsupported root evidence also invalidates an earlier success.
+    if (trace.schemaVersion !== 4) {
+      completed = false;
+      continue;
+    }
     if (trace.type === "boss.input.settled") {
       completed = trace.payload?.outcome === "terminal" && trace.payload.terminal?.kind === "success";
     } else if (trace.type === "boss.input.received" || trace.type === "session.started") {

@@ -14,6 +14,12 @@ and `npm start` (desktop) or `npm run start:server` (server).
 
 ## [Unreleased]
 
+### Fixed
+
+- Require supported Playbook trace evidence before advancing the intent queue.
+- Keep Running and interrupted attention consistent for sessions whose
+  transcripts have not loaded or are stale.
+
 ## [0.6.0] - 2026-09-09
 
 ### Added

@@ -1614,7 +1614,7 @@ test("dashboard-10: the Captain's own machine reporting after a park leaves the 
     ledger.attention.map((entry) => [entry.kind, entry.intentId]),
     [["question", "Q"]],
   );
-  // The parked machine leaving its park is what answers it.
+  // A Boss reply acknowledges the question as the parked machine resumes.
   beginTurn(store, "s1", 2, "only what exists today", 3000);
   append(store, "s1", {
     type: "captain_telemetry",
@@ -1625,6 +1625,45 @@ test("dashboard-10: the Captain's own machine reporting after a park leaves the 
   });
   ledger = fold(store, [lane("s1", projectId, true)]);
   assert.equal(ledger.attention.some((entry) => entry.kind === "question"), false);
+  store.close();
+});
+
+test("dashboard-10/33: manually dispatching another intent clears the prior question at turn start", () => {
+  const { store, projectId } = newProjectStore();
+  addSession(store, projectId, "s1");
+  queueIntent(store, projectId, "D", "h");
+  queueIntent(store, projectId, "Q", "i");
+  queueIntent(store, projectId, "N", "j");
+  beginTurn(store, "s1", 1, "completed delivery", 1000);
+  store.stampIntentDispatch("D", "s1", 1, 1000);
+  finishTurn(store, "s1", 1, 2000);
+  beginTurn(store, "s1", 2, "plan it", 3000);
+  store.stampIntentDispatch("Q", "s1", 2, 3000);
+  append(store, "s1", {
+    type: "captain_telemetry",
+    topic: "playbook.fsm.state",
+    payload: { from: "planAnalysis", to: "awaitBossReply" },
+    turnId: 2,
+    timestamp: 3500,
+  });
+  finishTurn(store, "s1", 2, 4000);
+  let ledger = fold(store, [lane("s1", projectId, false)]);
+  assert.equal(stateOf(ledger, "Q").reason, "question");
+  assert.equal(stateOf(ledger, "D").state, "finished");
+
+  // Inspect the new dispatch before any machine state transition:
+  // its start itself acknowledges the earlier question.
+  beginTurn(store, "s1", 3, "start another intent", 5000);
+  store.stampIntentDispatch("N", "s1", 3, 5000);
+  ledger = fold(store, [lane("s1", projectId, true)]);
+  assert.equal(stateOf(ledger, "N").state, "working");
+  assert.equal(stateOf(ledger, "Q").state, "finished");
+  assert.equal(stateOf(ledger, "D").state, "finished");
+  assert.deepEqual(
+    ledger.attention.map((entry) => [entry.kind, entry.intentId]),
+    [["finish", "D"], ["finish", "Q"]],
+  );
+  assert.equal(store.getIntent("D")?.closedAt, undefined);
   store.close();
 });
 
@@ -1650,13 +1689,12 @@ test("dashboard-10: a run dismissed while parked takes its question with it", ()
     turnId: 1,
     timestamp: 1500,
   });
+  // Dismiss within this turn so no later Boss turn acknowledges the
+  // question for us: disposal itself must prevent a standing question.
+  trace("session.disposed", {}, 1800);
   finishTurn(store, "s1", 1, 2000);
-  assert.equal(stateOf(fold(store, [lane("s1", projectId, false)]), "Q").reason, "question");
-  // The Captain dismisses the parked run on the next turn instead of
-  // answering it: the run is disposed, the question is gone.
-  beginTurn(store, "s1", 2, "/code something else", 3000);
-  trace("session.disposed", {}, 3100);
-  const ledger = fold(store, [lane("s1", projectId, true)]);
+  const ledger = fold(store, [lane("s1", projectId, false)]);
+  assert.equal(stateOf(ledger, "Q").state, "finished");
   assert.equal(ledger.attention.some((entry) => entry.kind === "question"), false);
   store.close();
 });

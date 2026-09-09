@@ -17,6 +17,7 @@ Amends [DR-035](035-intent-ledger.md)'s manual-only successor dispatch and confi
 ## Decision
 
 - After a locally owned intent-attributed turn fully settles with recorded successful completion of its governed root, the core submits the project's current first queued, unblocked intent into the same conversation through normal admission ([DR-051](051-runtime-held-for-a-turn.md)).
+  Completion follows the root playbook's declared success, including a concluded DEV discussion with no repository changes.
   The dispatch uses its current text and identity, and attribution changes only when the turn starts.
 - The prior intent remains finished and unconfirmed, with its delivery card and attention entry retained until a human verdict ([DR-038](038-history-is-done-work.md)).
   An older delivery does not hide newer work in the Running band, and its follow-up promise appears only while that intent still owns the conversation.

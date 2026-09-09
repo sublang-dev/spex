@@ -68,10 +68,11 @@ export function queueOf(
  * Captain has the floor (run-view-59). */
 export function sessionStatus(
   view: SessionView | undefined,
+  turnActive = view?.turnActive,
 ): { text: string; tone: StatusTone } {
   return stateLabel(view?.fsmState, {
     pendingQuestion: view?.pendingQuestion !== undefined,
-    turnActive: view?.turnActive,
+    turnActive,
     playersRunning: runningPlayer(view) !== undefined,
   });
 }

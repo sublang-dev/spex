@@ -218,7 +218,7 @@ function RunningRow({
   onOpen: () => void;
 }) {
   const view = useAppStore((state) => state.views[session.id]);
-  const status = sessionStatus(view);
+  const status = sessionStatus(view, session.turnActive ?? view?.turnActive);
   const player = runningPlayer(view);
   const startedAt = turnStartedAt(view);
   // The sidebar's title rule: the session's own words, a plain
@@ -321,13 +321,12 @@ export function DashboardSurface({
   // Only an interruption of the current work replaces its running
   // row (dashboard-50). Earlier deliveries can still owe a verdict
   // while a later intent runs in the same conversation. Read the
-  // unfiltered set so a project filter changes visibility alone.
+  // unfiltered set so a project filter changes visibility alone. The
+  // ledger owns standing interruptions; a transcript may be missing
+  // or still catching up and cannot overrule that fold.
   const summoned = new Set(
     (ledger?.attention ?? [])
-      .filter((entry) =>
-        entry.band === "interrupted" &&
-        (entry.turnId === undefined || entry.turnId === views[entry.sessionId]?.currentTurnId),
-      )
+      .filter((entry) => entry.band === "interrupted")
       .map((entry) => entry.sessionId),
   );
   const running = filtered.flatMap((project) =>
@@ -335,7 +334,7 @@ export function DashboardSurface({
       (session) =>
         session.live &&
         session.projectId === project.id &&
-        views[session.id]?.turnActive === true &&
+        (session.turnActive ?? views[session.id]?.turnActive) === true &&
         !summoned.has(session.id),
     ),
   );

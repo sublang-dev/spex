@@ -192,14 +192,20 @@ async function terminal(
   kind = "success",
   depth = 0,
   playbookId = "code",
+  options: { schemaVersion?: unknown; stateId?: string } = {},
 ): Promise<void> {
+  const stateId = options.stateId ?? "done";
   await session.emitTelemetry({
     topic: "playbook.trace",
     payload: {
-      schemaVersion: 3, seq: 1, timestamp: Date.now(),
+      schemaVersion: Object.hasOwn(options, "schemaVersion") ? options.schemaVersion : 4,
+      sequence: 1, timestamp: Date.now(),
       type: "boss.input.settled", playbookId, depth,
       sessionId: depth ? "nested-review" : "root-code", rootSessionId: "root-code",
-      payload: { outcome: "terminal", terminal: { kind } },
+      payload: {
+        outcome: "terminal", stateId, terminal: { kind, stateId },
+        state: { value: stateId, activeStateIds: [stateId], tags: [], status: "done", quiescent: true, stateId },
+      },
     },
   });
 }
@@ -314,7 +320,7 @@ for (const mode of ["automatic", "manual race", "confirmed during settlement"] a
   });
 }
 
-for (const outcome of ["chat", "unowned-success", "unknown", "question", "failure", "nested-only", "nested-success-root-failure", "captain-only", "success-then-new-root", "success-then-nonterminal", "throw", "abort"] as const) {
+for (const outcome of ["chat", "unowned-success", "unknown", "question", "failure", "nested-only", "nested-success-root-failure", "captain-only", "success-then-new-root", "success-then-nonterminal", "legacy-schema", "missing-schema", "future-schema", "invalid-schema", "success-then-legacy", "throw", "abort"] as const) {
   test(`queue advance: ${outcome} does not dispatch queued work`, { timeout: 15_000 }, async (t) => {
     const abortGate = deferred();
     const entered = deferred();
@@ -331,14 +337,23 @@ for (const outcome of ["chat", "unowned-success", "unknown", "question", "failur
       if (outcome === "nested-only" || outcome === "nested-success-root-failure") await terminal(session, "success", 1, "review");
       if (outcome === "failure" || outcome === "nested-success-root-failure") await terminal(session, "failure");
       if (outcome === "captain-only") await terminal(session, "success", 0, "captain");
+      if (["legacy-schema", "missing-schema", "future-schema", "invalid-schema", "success-then-legacy"].includes(outcome)) {
+        if (outcome === "success-then-legacy") await terminal(session);
+        const schemaVersion = outcome === "missing-schema" ? undefined
+          : outcome === "future-schema" ? 5 : outcome === "invalid-schema" ? "4" : 3;
+        await terminal(session, "success", 0, "code", { schemaVersion });
+      }
       if (outcome === "success-then-new-root" || outcome === "success-then-nonterminal") {
         await terminal(session);
         const root = outcome === "success-then-new-root" ? "new-root" : "root-code";
         await session.emitTelemetry({
           topic: "playbook.trace", payload: {
-            schemaVersion: 3, playbookId: "code", depth: 0, sessionId: root, rootSessionId: root,
+            schemaVersion: 4, sequence: 2, timestamp: Date.now(),
+            playbookId: "code", depth: 0, sessionId: root, rootSessionId: root,
             type: outcome === "success-then-new-root" ? "session.started" : "boss.input.settled",
-            payload: { outcome: "awaiting-boss" },
+            payload: { outcome: "quiescent", state: {
+              value: "awaitBossReply", activeStateIds: ["awaitBossReply"], tags: [], status: "active", quiescent: true,
+            } },
           },
         });
       }
@@ -346,9 +361,11 @@ for (const outcome of ["chat", "unowned-success", "unknown", "question", "failur
         await session.emitTelemetry({ topic: "playbook.fsm.state", payload: { from: "working", to: "awaitBossReply" } });
         await session.emitTelemetry({
           topic: "playbook.trace", payload: {
-            schemaVersion: 3, type: "boss.input.settled", playbookId: "code",
+            schemaVersion: 4, sequence: 1, timestamp: Date.now(), type: "boss.input.settled", playbookId: "code",
             sessionId: "root-code", rootSessionId: "root-code", depth: 0,
-            payload: { outcome: "awaiting-boss" },
+            payload: { outcome: "quiescent", state: {
+              value: "awaitBossReply", activeStateIds: ["awaitBossReply"], tags: [], status: "active", quiescent: true,
+            } },
           },
         });
       }
@@ -416,19 +433,23 @@ test("queue advance: queue edits, Confirm, subsequent plain chat, and restart ne
   assert.deepEqual(prompts, [first.text, chat], "stored success is evidence, not a restart trigger");
 });
 
-for (const initial of ["unknown", "question"] as const) {
+for (const initial of ["unknown", "question", "discussion"] as const) {
   test(`queue advance: successful manual follow-up after ${initial} advances the attributed intent`, { timeout: 20_000 }, async (t) => {
     const prompts: string[] = [];
     const h = await harness(t, async (turn, context, session) => {
       prompts.push(turn.prompt);
-      if (prompts.length === 1 && initial === "question") {
+      if (prompts.length === 1 && initial !== "unknown") {
         await session.emitTelemetry({ topic: "playbook.fsm.state", payload: { from: "working", to: "awaitBossReply" } });
       }
       if (turn.prompt === "Continue with that answer") {
-        if (initial === "question") {
+        if (initial !== "unknown") {
           await session.emitTelemetry({ topic: "playbook.fsm.state", payload: { from: "awaitBossReply", to: "working" } });
         }
-        await terminal(session);
+        if (initial === "discussion") {
+          await terminal(session, "success", 0, "dev", { stateId: "discussionComplete" });
+        } else {
+          await terminal(session);
+        }
       }
       await context.emitReply("Captain reply");
     });
@@ -439,7 +460,7 @@ for (const initial of ["unknown", "question"] as const) {
     await settled(h);
     const before = await client.expectOk("ledger.get", {});
     assert.equal(entry(before, next.id).intent.dispatched, undefined);
-    if (initial === "question") assert.equal(entry(before, first.id).reason, "question");
+    if (initial !== "unknown") assert.equal(entry(before, first.id).reason, "question");
 
     // No repeated intent id: ordinary follow-ups belong to the latest
     // dispatched open intent and can supply its missing completion evidence.

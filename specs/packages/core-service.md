@@ -268,8 +268,9 @@ While a session is live, when a Boss submission for it — from a client [[core-
 
 When a locally owned intent-attributed turn completes full settlement [[core-service-91](#core-service-91)], the core service shall automatically submit the project's first queued, unblocked intent in current rank order into the same conversation only when the settled turn proves successful governed-root completion ([DR-055](../decisions/055-queue-advancement.md)):
 
-- proof is a stored `captain_telemetry` record on `playbook.trace` in that turn, whose trace is `boss.input.settled` with `outcome: terminal` and `terminal.kind: success`, from a non-Captain root (`depth: 0`, `sessionId` equal to `rootSessionId`, no parent session), with no later unfinished governed work or standing interruption;
-- child completion, ordinary Captain replies, missing terminal evidence, failure, abort, questions and permissions do not prove success;
+- proof is a stored `captain_telemetry` record on `playbook.trace` in that turn, whose trace has `schemaVersion: 4` and is `boss.input.settled` with `outcome: terminal` and `terminal.kind: success`, from a non-Captain root (`depth: 0`, `sessionId` equal to `rootSessionId`, no parent session), with no later unfinished governed work, root trace of an unsupported version or standing interruption;
+- completion follows the root playbook's declared success, including a concluded DEV discussion with no repository changes;
+- child completion, ordinary Captain replies, missing terminal evidence, unsupported or missing trace versions, failure, abort, questions and permissions do not prove success;
 - selection and submission use the intent's current text, identity and rank, retaining explicit after-link blocking [[core-service-45](#core-service-45)], normal admission [[core-service-5](#core-service-5)], and actual-start dispatch stamping and attribution [[core-service-47](#core-service-47)]; a refused admission causes no automatic retry;
 - the settled intent remains finished and awaiting its human verdict [[core-service-46](#core-service-46)] [[core-service-49](#core-service-49)], and a manual follow-up attributed to it may supply the successful settlement;
 - each eligible settlement initiates at most one next dispatch, only while the conversation and attributed turn remain current; no next eligible intent starts nothing;
@@ -671,8 +672,8 @@ Where a session is live on the fake adapter, the test suite shall submit Boss te
 
 Where the integration suite starts intent-attributed work through real core commands with substitute agents, it shall verify automatic advancement [[core-service-94](#core-service-94)] across the following settlement cases:
 
-- successful governed-root completion starts the next unblocked intent exactly once after release and publication, using its latest queued text and rank, while the first remains finished and unconfirmed;
-- a child success, ordinary Captain response, missing completion evidence, failed root, aborted turn or standing question or permission starts no successor; a later manual follow-up with proven root success can advance;
+- successful governed-root completion in schema version four starts the next unblocked intent exactly once after release and publication, using its latest queued text and rank, while the first remains finished and unconfirmed;
+- a child success, ordinary Captain response, missing completion evidence, unsupported or missing trace version (including after an earlier valid success), failed root, aborted turn or standing question or permission starts no successor; a later manual follow-up with proven root success can advance, including a concluded DEV discussion with no repository changes;
 - an explicit after-link to the unconfirmed predecessor remains blocked, and a competing manual submission or admission refusal creates no duplicate turn or dispatch stamp;
 - adding or editing queued work during the active turn affects the next selection, while capture or edits after settlement, ledger reads, confirmation, adoption and restart start no work;
 - subsequent dispatch bounds the first intent's attribution, and confirming that first intent changes neither the second intent nor its active turn.

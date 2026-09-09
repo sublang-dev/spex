@@ -59,6 +59,12 @@ function foldConditions(records: StoredRecord[]): SessionConditions {
   >();
   for (const { record } of records) {
     switch (record.type) {
+      case "turn_started":
+        // The next Boss turn acknowledges the standing question,
+        // even when it dispatches another intent (dashboard-10).
+        question = undefined;
+        parkedRuns.clear();
+        break;
       case "turn_finished":
       case "turn_aborted":
         permissions.clear();
@@ -106,9 +112,8 @@ function foldConditions(records: StoredRecord[]): SessionConditions {
             turnId: telemetry.turnId,
           };
         } else if (stateText(telemetry.payload?.from) === "awaitBossReply") {
-          // Only the parked machine leaving its park answers the
-          // question; the Captain's own machine reports its states
-          // after the park and must not clear it (dashboard-10).
+          // The parked machine leaving its park answers the question;
+          // unrelated Captain state reports must not clear it.
           question = undefined;
         }
         break;

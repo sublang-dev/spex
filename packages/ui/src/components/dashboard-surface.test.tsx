@@ -1303,6 +1303,61 @@ describe("dashboard-50: the Running band lists what is working", () => {
     expect(screen.getByTestId("attention-confirm-i-first")).toBeTruthy();
   });
 
+  test.each(
+    (["missing", "stale"] as const).flatMap((transcript) =>
+      (["question", "permission", "failure"] as const).map((kind) => ({ transcript, kind })),
+    ),
+  )("summary activity and a standing $kind override a $transcript transcript", ({ transcript, kind }) => {
+    const stale = inFlight();
+    stale.turnActive = false;
+    const delivery: AttentionEntry = {
+      band: "finished",
+      kind: "finish",
+      intentId: "i-first",
+      title: "The first delivery",
+      projectId: "p1",
+      sessionId: "s-run",
+      turnId: 1,
+      since: NOW - MIN,
+    };
+    seed({
+      sessions: [{ ...live("s-run", "p1", "The shared conversation"), turnActive: true }],
+      views: transcript === "missing" ? {} : { "s-run": stale },
+      ledger: { intents: [], attention: [delivery], badge: 1 },
+    });
+    renderSurface();
+    expect(screen.getByTestId("running-session-s-run")).toBeTruthy();
+    expect(screen.getByTestId("running-state-s-run").textContent).toBe("deciding");
+    expect((screen.getByTestId("attention-confirm-i-first") as HTMLButtonElement).disabled).toBe(false);
+
+    act(() => useAppStore.setState({
+      ledger: {
+        intents: [],
+        attention: [delivery, {
+          ...delivery,
+          intentId: "i-next",
+          title: "The later work",
+          band: "interrupted",
+          kind,
+          turnId: 2,
+        }],
+        badge: 2,
+      },
+    }));
+    expect(screen.queryByTestId("running-session-s-run")).toBeNull();
+    expect(screen.getByTestId(`attention-i-next-${kind}`)).toBeTruthy();
+    expect(screen.getByTestId("attention-confirm-i-first")).toBeTruthy();
+  });
+
+  test("an inactive session summary overrides a stale active transcript", () => {
+    seed({
+      sessions: [{ ...live("s-idle", "p1", "Settling finished"), turnActive: false }],
+      views: { "s-idle": inFlight() },
+    });
+    renderSurface();
+    expect(screen.queryByTestId("running-session-s-idle")).toBeNull();
+  });
+
   test("nothing running keeps the band in place with its note (dashboard-8)", () => {
     seed({
       sessions: [live("s-idle", "p1", "Yesterday's work")],
